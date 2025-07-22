@@ -1,0 +1,9 @@
+# pixi environments
+.pixi
+data/MNIST/raw
+lmc/__pycache__
+__pycache__
+lmc/data/MNIST/raw
+lmc/experiments
+lmc/wandb
+.convexity_of_space.py.swp
