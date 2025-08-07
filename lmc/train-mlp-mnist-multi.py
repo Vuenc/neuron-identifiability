@@ -12,9 +12,12 @@ from models.models_mlp import SigmaMLP, WMLP, MLP
 from LMC_utils import *
 import argparse
 import multiprocessing
+import pickle
+import datasets
 
-def train(model, optimizer, train_loader, device, batch_size=32, n_epochs=10, lr_schedule = None):
-    loss_fn = nn.CrossEntropyLoss()
+def train(model, optimizer, train_loader, device, index, batch_size=32, n_epochs=10, lr_schedule = None, output_path=None, save_every_epoch=0):
+    assert output_path is not None
+    loss_fn = nn.CrossEntropyLoss(reduction="sum")
     train_loss_history = np.zeros([n_epochs, 1])
     valid_accuracy_history = np.zeros([n_epochs, 1])
     valid_loss_history = np.zeros([n_epochs, 1])
@@ -40,6 +43,13 @@ def train(model, optimizer, train_loader, device, batch_size=32, n_epochs=10, lr
         # Track loss each epoch
         print('Train Epoch: %d  Average loss: %.4f' %
               (epoch + 1,  train_loss_history[epoch]))
+
+        # if epoch % 5 == 0:
+
+        if save_every_epoch > 0 and epoch % save_every_epoch == 0:
+            import pickle
+            with open(f"{output_path}/trained_{'mlp' if isinstance(model, MLP) else 'wmlp'}_{index}_epoch-{epoch}.pickle", 'wb') as handle:
+                pickle.dump(dict(model=model, loss=float(train_loss)/len(train_loader.dataset)), handle, protocol=pickle.HIGHEST_PROTOCOL)
 
         # model.eval()
 
@@ -92,18 +102,20 @@ def test(model, batch_size=32):
           100. * test_accuracy))
     return test_loss, test_accuracy
 
-def train_one(index, args):
-    normalize = transforms.Normalize((0.1307,), (0.3081,))
-    train_dataset = datasets.MNIST(root='./data', train=True, transform=transforms.Compose([
-            transforms.ToTensor(),
-            normalize,
-        ]), download=True)
-    #USING CS189 CODE
-    train_dataset, _ = torch.utils.data.random_split(
-        train_dataset,
-        [int(len(train_dataset)*0.9), int(len(train_dataset)*0.1)],
-        generator=torch.Generator().manual_seed(42)
-    )
+def seed_training(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+def train_one(index, args, seed):
+    seed_training(seed)
+    device = torch.device('cuda')
+
+    train_dataset = datasets.dataset_factories[args.dataset](device)
+    # train_dataset = random_datasets.GaussianNoiseDataset("data/GaussianNoise/noise-50000-images.npy", "data/GaussianNoise/noise-50000-labels.npy", device)
+    # train_dataset = [(image.to(device), label.to(device)) for image, label in random_datasets.MNISTRandomLabelsDataset(138914, device)]
+    # train_dataset = list(random_datasets.MNISTRandomLabelsDataset(138914, device))
 
     train_loader = torch.utils.data.DataLoader(
         train_dataset, 
@@ -112,7 +124,6 @@ def train_one(index, args):
         pin_memory = False
     )
 
-    device = torch.device('cuda')
     in_dim, out_dim = 784,10
     linear_mask_params_0 = {'mask_constant' : args.lin_c_0, 'mask_type' : 'random_subsets', 'do_normal_mask' : True, 'num_fixed': args.lin_n_0}
     linear_mask_params_1 = {'mask_constant' : args.lin_c_1, 'mask_type' : 'random_subsets', 'do_normal_mask' : True, 'num_fixed': args.lin_n_1}
@@ -147,15 +158,14 @@ def train_one(index, args):
         
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay = args.weight_decay)
 
-    train(model, optimizer, train_loader, device, n_epochs = epochs, lr_schedule = None, batch_size=args.batch_size)
+    train(model, optimizer, train_loader, device, index, n_epochs = epochs, lr_schedule = None, batch_size=args.batch_size, output_path=args.output_path, save_every_epoch=args.save_every_epoch)
     import pickle
-    with open(f'experiments/interpolations-trained/trained_{'mlp' if args.symmetry == 0 else 'wmlp'}_{index}.pickle', 'wb') as handle:
+    with open(f'{args.output_path}/trained_{'mlp' if args.symmetry == 0 else 'wmlp'}_{index}.pickle', 'wb') as handle:
         pickle.dump(dict(model=model), handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 
 parser = argparse.ArgumentParser(description='Propert ResNets for CIFAR10 in pytorch')
 if __name__ == '__main__':
-    from torchvision import datasets, transforms
     parser.add_argument('--epochs', default=25, type=int, metavar='N',
                         help='number of total epochs to run')
     parser.add_argument('-b', '--batch_size', default=64, type=int,
@@ -185,7 +195,14 @@ if __name__ == '__main__':
 
     parser.add_argument('--symmetry',  default=1, type=int,
                         metavar='s', help='Symmetry: 0 (Standard) 1 (W) 2 (Sigma)')
+    parser.add_argument('--output_path',  required=True,
+                        metavar='o', help='Path of directory where to write output files')
+    parser.add_argument("--num", required=True, type=int, metavar="n", help="Number of models to train")
+    parser.add_argument("--dataset", type=str, required=True, choices=list(datasets.dataset_factories.keys()))
+    parser.add_argument("--save_every_epoch", type=int, required=False, default=1, help="Save every n-th epoch (default: 1). Pass 0 to disable saving.")
     args = parser.parse_args()
 
-    with multiprocessing.Pool(16) as pool:
-        pool.starmap(train_one, [(i, args) for i in range(64)])
+    seeds = [random.randint(0, 2**31) for i in range(args.num)]
+    print(seeds)
+    with multiprocessing.Pool(17) as pool:
+        pool.starmap(train_one, [(i, args, seed) for i, seed in enumerate(seeds)])

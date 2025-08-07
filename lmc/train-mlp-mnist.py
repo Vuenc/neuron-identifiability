@@ -11,6 +11,7 @@ import numpy as np
 from models.models_mlp import SigmaMLP, WMLP, MLP
 from LMC_utils import *
 import argparse
+
 def train(model, optimizer, batch_size=32, n_epochs=10, lr_schedule = None):
     loss_fn = nn.CrossEntropyLoss()
     train_loss_history = np.zeros([n_epochs, 1])
@@ -92,7 +93,7 @@ def test(model, batch_size=32):
 
 parser = argparse.ArgumentParser(description='Propert ResNets for CIFAR10 in pytorch')
 if __name__ == '__main__':
-    from torchvision import datasets, transforms
+    # from torchvision import datasets, transforms
     parser.add_argument('--epochs', default=25, type=int, metavar='N',
                         help='number of total epochs to run')
     parser.add_argument('-b', '--batch_size', default=64, type=int,
@@ -120,7 +121,7 @@ if __name__ == '__main__':
     parser.add_argument('--lin_c_0', default=1, type=int,
                         metavar='LC', help='lin c 0 (default: 1)')
 
-    parser.add_argument('--symmetry',  default=0, type=int,
+    parser.add_argument('--symmetry',  default=1, type=int,
                         metavar='s', help='Symmetry: 0 (Standard) 1 (W) 2 (Sigma)')
     args = parser.parse_args()
     normalize = transforms.Normalize((0.1307,), (0.3081,))
@@ -208,6 +209,10 @@ if __name__ == '__main__':
     test_loss, test_acc = test(model1)
     wandb.run.summary["test_acc_1"] = test_acc
     wandb.run.summary["test_loss_1"] = test_loss
+    import pickle
+    with open(f'trained_wmlp.pickle', 'wb') as handle:
+        pickle.dump(dict(wmlp=model1), handle, protocol=pickle.HIGHEST_PROTOCOL)
+    
 
     train(model2, optimizer2, n_epochs = epochs, lr_schedule = None, batch_size=args.batch_size)
     test_loss, test_acc = test(model2)

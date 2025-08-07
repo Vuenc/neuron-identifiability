@@ -7,3 +7,5 @@ lmc/data/MNIST/raw
 lmc/experiments
 lmc/wandb
 .convexity_of_space.py.swp
+lmc/data/GaussianNoise
+lmc/plots
