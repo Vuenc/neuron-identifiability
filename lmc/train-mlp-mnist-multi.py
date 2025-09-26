@@ -14,13 +14,33 @@ import argparse
 import multiprocessing
 import pickle
 import datasets
+import os
+from datetime import datetime
 
-def train(model, optimizer, train_loader, device, index, batch_size=32, n_epochs=10, lr_schedule = None, output_path=None, save_every_epoch=0):
+def _model_prefix(model):
+    if isinstance(model, MLP):
+        return "mlp"
+    elif isinstance(model, WMLP):
+        return "wmlp"
+    elif isinstance(model, SigmaMLP):
+        return "sigmlp"
+
+def _snap(output_path, model, index, step, epoch, batch_idx, loss):
+    md = {k: v.detach().cpu() for k, v in model.state_dict().items()}
+    gd = {n: (p.grad.detach().clone().cpu() if p.grad is not None else None) for n, p in model.named_parameters()}
+    prefix = _model_prefix(model)
+    torch.save(dict(step=step, epoch=epoch, batch_idx=batch_idx, loss=float(loss),
+                    model_state_dict=md, grads_state_dict=gd),
+               f"{output_path}/trained_{prefix}_{index}_step-{step}.pt")
+
+def train(model, optimizer, train_loader, device, index, batch_size=32, n_epochs=10, lr_schedule = None, output_path=None, save_every_epoch=0, save_every_step=0):
     assert output_path is not None
+    os.makedirs(output_path, exist_ok=True)
     loss_fn = nn.CrossEntropyLoss(reduction="sum")
     train_loss_history = np.zeros([n_epochs, 1])
     valid_accuracy_history = np.zeros([n_epochs, 1])
     valid_loss_history = np.zeros([n_epochs, 1])
+    step = 0
     for epoch in range(n_epochs):
 
         # Train code from CS189
@@ -35,7 +55,10 @@ def train(model, optimizer, train_loader, device, index, batch_size=32, n_epochs
             loss = loss_fn(output, target)
             train_loss += loss.item()
             loss.backward()
+            if save_every_step and step % save_every_step == 0:
+                _snap(output_path, model, index, step, epoch, batch_idx, loss.item()/data.size(0))
             optimizer.step()
+            step += 1
         if lr_schedule:
             lr_schedule.step()
         train_loss_history[epoch] = train_loss / len(train_loader.dataset)
@@ -48,7 +71,7 @@ def train(model, optimizer, train_loader, device, index, batch_size=32, n_epochs
 
         if save_every_epoch > 0 and epoch % save_every_epoch == 0:
             import pickle
-            with open(f"{output_path}/trained_{'mlp' if isinstance(model, MLP) else 'wmlp'}_{index}_epoch-{epoch}.pickle", 'wb') as handle:
+            with open(f"{output_path}/trained_{_model_prefix(model)}_{index}_epoch-{epoch}.pickle", 'wb') as handle:
                 pickle.dump(dict(model=model, loss=float(train_loss)/len(train_loader.dataset)), handle, protocol=pickle.HIGHEST_PROTOCOL)
 
         # model.eval()
@@ -77,30 +100,30 @@ def train(model, optimizer, train_loader, device, index, batch_size=32, n_epochs
     return model
 
 
-def test(model, batch_size=32):
+# def test(model, batch_size=32):
 
-    model.eval()
-    loss_fn = nn.CrossEntropyLoss(reduction = 'sum')
+#     model.eval()
+#     loss_fn = nn.CrossEntropyLoss(reduction = 'sum')
  
-    test_loss = 0
-    correct = 0
-    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
-    with torch.no_grad():
-        for data, target in test_loader:
-            data = data.to(device)
-            target = target.to(device)
-            output = model(data)
-            test_loss += loss_fn(output, target).item()  # Sum up batch loss
-            pred = output.argmax(dim=1, keepdim=True)  # Get the index of the max class score
-            correct += pred.eq(target.view_as(pred)).sum().item()
+#     test_loss = 0
+#     correct = 0
+#     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
+#     with torch.no_grad():
+#         for data, target in test_loader:
+#             data = data.to(device)
+#             target = target.to(device)
+#             output = model(data)
+#             test_loss += loss_fn(output, target).item()  # Sum up batch loss
+#             pred = output.argmax(dim=1, keepdim=True)  # Get the index of the max class score
+#             correct += pred.eq(target.view_as(pred)).sum().item()
 
-    test_loss /= len(test_loader.dataset)
-    test_accuracy = correct / len(test_loader.dataset)
+#     test_loss /= len(test_loader.dataset)
+#     test_accuracy = correct / len(test_loader.dataset)
     
-    print('Test set: Average loss: %.4f, Accuracy: %d/%d (%.4f)' %
-          (test_loss, correct, len(test_loader.dataset),
-          100. * test_accuracy))
-    return test_loss, test_accuracy
+#     print('Test set: Average loss: %.4f, Accuracy: %d/%d (%.4f)' %
+#           (test_loss, correct, len(test_loader.dataset),
+#           100. * test_accuracy))
+#     return test_loss, test_accuracy
 
 def seed_training(seed):
     random.seed(seed)
@@ -120,7 +143,7 @@ def train_one(index, args, seed):
     train_loader = torch.utils.data.DataLoader(
         train_dataset, 
         batch_size=args.batch_size, 
-        shuffle=True,
+        shuffle=False, # TODO: Turn on again! Just for reproducibility w/ gradients
         pin_memory = False
     )
 
@@ -142,11 +165,11 @@ def train_one(index, args, seed):
     NUM_LAYERS = 4
     model = None
     if args.symmetry == 0:
-        model = MLP(in_dim, HIDDEN_DIM, out_dim, NUM_LAYERS, norm='layer').to(device)
+        model = MLP(in_dim, HIDDEN_DIM, out_dim, NUM_LAYERS, norm=args.norm, act=args.act).to(device)
     elif args.symmetry == 1:
-        model = WMLP(in_dim, HIDDEN_DIM, out_dim, NUM_LAYERS, mask_params, norm='layer').to(device)
+        model = WMLP(in_dim, HIDDEN_DIM, out_dim, NUM_LAYERS, mask_params, norm=args.norm, act=args.act).to(device)
     elif args.symmetry == 2:
-        model = SigmaMLP(in_dim, HIDDEN_DIM, out_dim, NUM_LAYERS, norm='layer').to(device)
+        model = SigmaMLP(in_dim, HIDDEN_DIM, out_dim, NUM_LAYERS, norm=args.norm, act=args.act).to(device)
     assert model is not None
 
     naive_num_params = sum(p.numel() for p in model.parameters())
@@ -158,9 +181,11 @@ def train_one(index, args, seed):
         
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay = args.weight_decay)
 
-    train(model, optimizer, train_loader, device, index, n_epochs = epochs, lr_schedule = None, batch_size=args.batch_size, output_path=args.output_path, save_every_epoch=args.save_every_epoch)
+    out_dir = os.path.join(os.path.realpath(args.output_path), f"run_{index}")
+    os.makedirs(out_dir, exist_ok=True)
+    train(model, optimizer, train_loader, device, index, n_epochs = epochs, lr_schedule = None, batch_size=args.batch_size, output_path=out_dir, save_every_epoch=args.save_every_epoch, save_every_step=args.save_every_step)
     import pickle
-    with open(f'{args.output_path}/trained_{'mlp' if args.symmetry == 0 else 'wmlp'}_{index}.pickle', 'wb') as handle:
+    with open(f'{out_dir}/trained_{_model_prefix(model)}_{index}.pickle', 'wb') as handle:
         pickle.dump(dict(model=model), handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 
@@ -195,12 +220,25 @@ if __name__ == '__main__':
 
     parser.add_argument('--symmetry',  default=1, type=int,
                         metavar='s', help='Symmetry: 0 (Standard) 1 (W) 2 (Sigma)')
+    parser.add_argument('--act', default='gelu', type=str, choices=('gelu', 'identity'))
+    parser.add_argument('--norm', default=None, type=str, choices=('batch', 'layer', 'batch_linear', 'layer_linear'))
     parser.add_argument('--output_path',  required=True,
                         metavar='o', help='Path of directory where to write output files')
     parser.add_argument("--num", required=True, type=int, metavar="n", help="Number of models to train")
     parser.add_argument("--dataset", type=str, required=True, choices=list(datasets.dataset_factories.keys()))
     parser.add_argument("--save_every_epoch", type=int, required=False, default=1, help="Save every n-th epoch (default: 1). Pass 0 to disable saving.")
+    parser.add_argument("--save_every_step", type=int, default=0)
     args = parser.parse_args()
+
+    # resolve base output dir, then append date/time subfolders
+    base_out = os.path.realpath(args.output_path)
+    if os.path.exists(base_out) and not os.path.isdir(base_out):
+        raise ValueError(f"--output_path '{args.output_path}' exists but is not a directory")
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    time_str = datetime.now().strftime("%H-%M-%S")
+    base_out = os.path.join(base_out, date_str, time_str)
+    os.makedirs(base_out, exist_ok=True)
+    args.output_path = base_out
 
     seeds = [random.randint(0, 2**31) for i in range(args.num)]
     print(seeds)

@@ -9,3 +9,6 @@ lmc/wandb
 .convexity_of_space.py.swp
 lmc/data/GaussianNoise
 lmc/plots
+outputs
+sbatch
+.vscode
