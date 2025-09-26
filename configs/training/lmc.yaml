@@ -1,0 +1,12 @@
+# @package training
+num_epochs: 25
+val_every: 1
+save_every: null
+save_path: null
+early_stopping: null
+
+# LMC-specific settings
+interpolation:
+  enabled: true
+  steps: 10
+  rebasin: false  # Only for standard models

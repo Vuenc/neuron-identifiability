@@ -1,0 +1,4 @@
+# @package interpolation
+enabled: true
+type: midpoint  # Midpoint evaluation for 2+ models
+steps: 1  # Ignored for midpoint evaluation

@@ -1,0 +1,12 @@
+# @package training
+num_epochs: 100
+val_every: 1
+save_every: null
+save_path: null
+early_stopping:
+  patience: 10
+  min_delta: 0.001
+
+# Gradient and parameter saving (set to null to disable)
+save_grad_every: null  # Save gradients every N epochs (null = disabled)
+save_params_every: null  # Save parameters every N epochs (null = disabled)

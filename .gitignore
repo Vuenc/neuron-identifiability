@@ -12,3 +12,4 @@ lmc/plots
 outputs
 sbatch
 .vscode
+wandb

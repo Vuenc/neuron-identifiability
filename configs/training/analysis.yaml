@@ -1,0 +1,13 @@
+# @package training
+# Training config for gradient and parameter analysis
+num_epochs: 50
+val_every: 1
+save_every: 10
+save_path: null
+early_stopping:
+  patience: 20
+  min_delta: 0.001
+
+# Gradient and parameter saving for analysis
+save_grad_every: 5  # Save gradients every 5 epochs
+save_params_every: 1  # Save parameters every epoch

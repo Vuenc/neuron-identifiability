@@ -1,0 +1,3 @@
+# @package logging
+use_wandb: false
+log_batch_metrics: false

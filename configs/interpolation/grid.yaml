@@ -1,0 +1,4 @@
+# @package interpolation
+enabled: true
+type: grid  # Full grid interpolation between 2 models
+steps: 10  # Number of interpolation steps

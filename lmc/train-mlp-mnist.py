@@ -93,7 +93,7 @@ def test(model, batch_size=32):
 
 parser = argparse.ArgumentParser(description='Propert ResNets for CIFAR10 in pytorch')
 if __name__ == '__main__':
-    # from torchvision import datasets, transforms
+    from torchvision import datasets, transforms
     parser.add_argument('--epochs', default=25, type=int, metavar='N',
                         help='number of total epochs to run')
     parser.add_argument('-b', '--batch_size', default=64, type=int,

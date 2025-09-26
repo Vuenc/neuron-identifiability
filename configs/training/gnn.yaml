@@ -1,0 +1,13 @@
+# @package training
+num_epochs: 500
+val_every: 1
+save_every: null
+save_path: null
+early_stopping:
+  patience: 50
+  min_delta: 0.001
+
+# GNN-specific settings
+runs: 1
+log_steps: 1
+warmup_steps: 25

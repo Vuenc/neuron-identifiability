@@ -1,0 +1,16 @@
+# @package logging
+use_wandb: true
+project: asymmetric-networks
+entity: asymmetric-networks
+group: null
+job_type: null
+name: null
+tags: []
+notes: null
+log_batch_metrics: false
+log_gradients: false
+log_parameters: false
+log_model: false
+resume: null
+reinit: false
+mode: online

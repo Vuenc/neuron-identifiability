@@ -1,0 +1,4 @@
+# @package interpolation
+enabled: false
+type: auto  # Ignored when disabled
+steps: 25  # Ignored when disabled

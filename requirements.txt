@@ -1,0 +1,21 @@
+# Core dependencies (install these)
+torch>=1.12.0
+torchvision>=0.13.0
+numpy>=1.21.0
+hydra-core>=1.2.0
+omegaconf>=2.2.0
+wandb>=0.13.0
+matplotlib>=3.5.0
+seaborn>=0.11.0
+tqdm>=4.64.0
+scipy>=1.8.0
+scikit-learn>=1.1.0
+
+# Optional dependencies for GNNs (install if needed)
+# torch-geometric>=2.1.0
+# ogb>=1.3.0
+
+# Development (install if needed)
+# pytest>=7.0.0
+# black>=22.0.0
+# flake8>=4.0.0

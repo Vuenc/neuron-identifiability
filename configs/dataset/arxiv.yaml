@@ -1,0 +1,4 @@
+# @package dataset
+name: arxiv
+data_dir: ./data
+batch_size: 1  # GNNs process all nodes at once

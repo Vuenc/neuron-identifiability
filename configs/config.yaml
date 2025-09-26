@@ -1,0 +1,31 @@
+# @package _global_
+defaults:
+  - model: mlp_mnist
+  - dataset: mnist
+  - optimizer: adamw
+  - scheduler: none
+  - training: default
+  - interpolation: disabled
+  - logging: wandb
+  - _self_
+
+# Multi-model experiment settings (optional)
+num_models: 1
+use_fixed_masks: false
+
+# Global settings
+seed: 42
+device: cuda
+output_dir: ./outputs
+experiment_name: ${now:%Y-%m-%d}/${now:%H-%M-%S}_${model.name}
+
+# Hydra configuration
+hydra:
+  run:
+    dir: ${output_dir}/${experiment_name}
+
+# Override any config here
+# model:
+#   name: resnet_cifar
+# dataset:
+#   name: cifar10

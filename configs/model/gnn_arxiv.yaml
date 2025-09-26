@@ -1,0 +1,14 @@
+# @package model
+_target_: src.models.gnn.create_gnn
+name: gnn_arxiv
+
+# Model architecture
+model_type: gnn  # gnn, asym_gelu_gnn, asym_swiglu_gnn, asym_w_gnn
+in_channels: 128  # Will be set based on dataset
+hidden_channels: 256
+out_channels: 40  # Will be set based on dataset
+num_layers: 3
+dropout: 0.0
+
+# For asymmetric models
+C_lst: null  # Will be generated if needed
