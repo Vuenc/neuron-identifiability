@@ -3,7 +3,7 @@ _target_: src.models.resnet.create_resnet
 name: resnet_cifar
 
 # Model architecture
-symmetry: 1  # 0: Standard, 1: W-Asym
+symmetry: 0  # 0: Standard, 1: W-Asym
 depth: 20
 w: 1
 num_classes: 10

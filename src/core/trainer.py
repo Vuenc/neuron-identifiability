@@ -28,7 +28,9 @@ class Trainer:
                  loss_fn: Optional[Callable] = None,
                  metrics: Optional[Dict[str, Callable]] = None,
                  logging: Optional[Dict[str, Any]] = None,
-                 print_summary: bool = True):
+                 print_summary: bool = True,
+                 model_prefix: str = '',
+                 shared_wandb: bool = False):
         """Initialize the trainer.
         
         Args:
@@ -42,6 +44,9 @@ class Trainer:
             loss_fn: Loss function (defaults to CrossEntropyLoss)
             metrics: Dictionary of metric functions
             logging: Logging configuration
+            print_summary: Whether to print model summary
+            model_prefix: Prefix for wandb logging (e.g., 'model_1_')
+            shared_wandb: Whether this trainer shares a wandb run with others
         """
         self.model = model
         self.train_loader = train_loader
@@ -54,6 +59,8 @@ class Trainer:
         self.metrics = metrics or {}
         self.logging = logging or {}
         self.print_summary = print_summary
+        self.model_prefix = model_prefix
+        self.shared_wandb = shared_wandb
         
         # Move model to device
         self.model.to(self.device)
@@ -68,8 +75,8 @@ class Trainer:
             self._print_mask_checksum()
             self._print_param_checksum()
         
-        # Initialize logging if wandb is configured
-        if self.logging.get('use_wandb', False):
+        # Initialize logging if wandb is configured and not using shared wandb
+        if self.logging.get('use_wandb', False) and not self.shared_wandb:
             wandb_config = {
                 'project': self.logging.get('project', 'asymmetric-networks'),
                 'name': self.logging.get('name', None),
@@ -115,8 +122,8 @@ class Trainer:
             masked_params = self.model.count_unused_params()
             trainable_params = total_params - masked_params
             sparsity = masked_params / total_params * 100
-            print(f"Masked parameters: {masked_params:,}")
-            print(f"Trainable parameters: {trainable_params:,}")
+            print(f"Masked parameters: {int(masked_params):,}")
+            print(f"Trainable parameters: {int(trainable_params):,}")
             print(f"Sparsity: {sparsity:.1f}%")
         else:
             print(f"Trainable parameters: {total_params:,}")
@@ -197,8 +204,8 @@ class Trainer:
             if self.logging.get('log_batch_metrics', False) and batch_idx % 100 == 0:
                 if self.logging.get('use_wandb', False):
                     wandb.log({
-                        'batch_loss': loss.item(),
-                        'batch': batch_idx
+                        f'{self.model_prefix}_batch_loss': loss.item(),
+                        f'{self.model_prefix}_batch': batch_idx
                     })
         
         avg_loss = total_loss / num_batches
@@ -276,6 +283,18 @@ class Trainer:
         patience_counter = 0
         global_step = 0
         
+        # Save model at initialization (step 0) if save_path is provided
+        if save_path is not None:
+            torch.save({
+                'epoch': 0,  # Use 0 to indicate initialization
+                'step': 0,
+                'model_state_dict': self.model.state_dict(),
+                'trainable': [k for k, v in self.model.named_parameters() \
+                              if v.requires_grad],
+                'optimizer_state_dict': self.optimizer.state_dict(),
+                'val_accuracy': 0.0  # No validation at initialization
+            }, f"{save_path}/checkpoint_epoch_0_{self.model_prefix}.pt")
+        
         for epoch in range(num_epochs):
             # Training
             train_metrics = self.train_epoch()
@@ -301,10 +320,10 @@ class Trainer:
                 # Log metrics
                 if self.logging.get('use_wandb', False):
                     wandb.log({
-                        'epoch': epoch,
-                        'train_loss': train_metrics['train_loss'],
-                        'val_loss': val_metrics['val_loss'],
-                        'val_accuracy': val_metrics['val_accuracy']
+                        f'{self.model_prefix}_epoch': epoch,
+                        f'{self.model_prefix}_train_loss': train_metrics['train_loss'],
+                        f'{self.model_prefix}_val_loss': val_metrics['val_loss'],
+                        f'{self.model_prefix}_val_accuracy': val_metrics['val_accuracy']
                     })
                 
                 print(f'Epoch {epoch+1}/{num_epochs}: '
@@ -325,14 +344,17 @@ class Trainer:
                         break
             
             # Save model
-            if save_every is not None and (epoch + 1) % save_every == 0:
-                if save_path is not None:
-                    torch.save({
-                        'epoch': epoch,
-                        'model_state_dict': self.model.state_dict(),
-                        'optimizer_state_dict': self.optimizer.state_dict(),
-                        'val_accuracy': val_metrics.get('val_accuracy', 0.0)
-                    }, f"{save_path}/checkpoint_epoch_{epoch+1}.pt")
+            if save_every is not None and (epoch + 1) % save_every == 0 and \
+                    save_path is not None:
+                torch.save({
+                    'epoch': epoch + 1,
+                    'step': global_step,
+                    'model_state_dict': self.model.state_dict(),
+                    'trainable': [k for k, v in self.model.named_parameters() \
+                                  if v.requires_grad],
+                    'optimizer_state_dict': self.optimizer.state_dict(),
+                    'val_accuracy': val_metrics.get('val_accuracy', 0.0)
+                }, f"{save_path}/checkpoint_epoch_{epoch+1}_{self.model_prefix}.pt")
             
             global_step += len(self.train_loader)
         
@@ -344,10 +366,12 @@ class Trainer:
         # Log final results
         if self.logging.get('use_wandb', False):
             wandb.log({
-                'final_test_loss': test_metrics['test_loss'],
-                'final_test_accuracy': test_metrics['test_accuracy']
+                f'{self.model_prefix}_final_test_loss': test_metrics['test_loss'],
+                f'{self.model_prefix}_final_test_accuracy': test_metrics['test_accuracy']
             })
-            wandb.finish()
+            # Only finish wandb if not using shared wandb
+            if not self.shared_wandb:
+                wandb.finish()
         
         print(f'Final Test Results: Loss: {test_metrics["test_loss"]:.4f}, '
               f'Accuracy: {test_metrics["test_accuracy"]:.4f}')
@@ -368,7 +392,7 @@ class Trainer:
             if param.grad is not None:
                 gradients[name] = param.grad.detach().cpu()
         
-        save_file = f"{save_path}/gradients_epoch_{epoch}_step_{step}.pt"
+        save_file = f"{save_path}/checkpoint_epoch_{epoch}_step_{step}_gradients.pt"
         torch.save({
             'epoch': epoch,
             'step': step,
@@ -385,7 +409,7 @@ class Trainer:
         for name, param in self.model.named_parameters():
             parameters[name] = param.detach().cpu()
         
-        save_file = f"{save_path}/parameters_epoch_{epoch}_step_{step}.pt"
+        save_file = f"{save_path}/checkpoint_epoch_{epoch}_step_{step}_parameters.pt"
         torch.save({
             'epoch': epoch,
             'step': step,

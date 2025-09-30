@@ -7,6 +7,8 @@ hidden_dim: 512
 output_dim: 10
 num_layers: 4
 norm: layer
+elementwise_affine: true
+activation: gelu
 
 symmetry: 1  # 0: Standard, 1: W-Asym, 2: Sigma-Asym
 mask_params:

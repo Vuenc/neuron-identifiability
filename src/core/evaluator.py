@@ -89,7 +89,8 @@ class Evaluator:
                               model2: nn.Module,
                               data_loader: DataLoader,
                               steps: int = 10,
-                              loss_fn: Optional[Callable] = None) -> List[Dict[str, float]]:
+                              loss_fn: Optional[Callable] = None,
+                              use_wandb: bool = False) -> List[Dict[str, float]]:
         """Evaluate linear interpolation between two models.
         
         Args:
@@ -97,6 +98,7 @@ class Evaluator:
             data_loader: Data loader to evaluate on
             steps: Number of interpolation steps
             loss_fn: Loss function
+            use_wandb: Whether to log to wandb
             
         Returns:
             List of evaluation results for each interpolation step
@@ -124,6 +126,19 @@ class Evaluator:
             # Evaluate
             result = self.evaluate(data_loader, loss_fn, f'step_{i}_')
             results.append(result)
+            
+            # Log to wandb if enabled
+            if use_wandb:
+                try:
+                    import wandb
+                    if wandb.run is not None:
+                        wandb.log({
+                            'evaluator_interpolation_alpha': alpha,
+                            'evaluator_interpolation_loss': result.get('loss', 0.0),
+                            'evaluator_interpolation_accuracy': result.get('accuracy', 0.0),
+                        })
+                except ImportError:
+                    print("Warning: wandb not available for logging")
         
         # Restore original model state
         self.model.load_state_dict(original_state)

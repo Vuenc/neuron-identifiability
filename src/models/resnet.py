@@ -8,6 +8,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 import itertools
+import random
+import numpy as np
 from ..core.registry import register
 
 
@@ -31,18 +33,17 @@ class SparseConv2d(nn.Module):
         super().__init__()
         assert 2**(in_channels * kernel_size ** 2) >= out_channels, "out dimension too big for asymmetry"
 
-        mask = self._make_conv_mask(in_channels, out_channels, kernel_size, 
-                                  mask_type=mask_type, num_fixed=num_fixed, mask_num=mask_num)
+        mask = make_conv_mask(in_channels, out_channels, kernel_size, 
+                             mask_type=mask_type, num_fixed=num_fixed, mask_num=mask_num)
         self.register_buffer('mask', mask, persistent=True)
 
         self.weight = nn.Parameter(torch.empty((out_channels, in_channels, kernel_size, kernel_size)))
         self.weight.register_hook(lambda grad: self.mask * grad)
 
         if do_normal_mask:
-            normal_mask = self._conv_normal_mask(out_channels, in_channels, kernel_size, mask_num)
-            self.register_buffer('normal_mask', normal_mask, persistent=True)
+            self.register_buffer('normal_mask', conv_normal_mask(out_channels, in_channels, kernel_size, mask_num), persistent=True)
         else:
-            self.register_buffer('normal_mask', torch.ones_like(mask), persistent=True)
+            self.register_buffer('normal_mask', torch.ones(size=(out_channels, in_channels, kernel_size, kernel_size)), persistent=True)
 
         if bias:
             self.bias = nn.Parameter(torch.empty(out_channels))
@@ -56,39 +57,11 @@ class SparseConv2d(nn.Module):
         self.mask_num = mask_num
         self.stride = stride
         self.padding = padding
-        
         self.reset_parameters()
     
-    def _make_conv_mask(self, in_channels, out_channels, kernel_size, mask_num, 
-                       mask_type='random_subsets', num_fixed=6):
-        """Create sparse mask for convolution."""
-        mask = torch.ones(out_channels, in_channels, kernel_size, kernel_size)
-        
-        if mask_type == 'random_subsets':
-            g = torch.Generator()
-            g.manual_seed(abs(hash(str(mask_num))))
-            
-            for i in range(out_channels):
-                total_weights = in_channels * kernel_size * kernel_size
-                if num_fixed < total_weights:
-                    indices = torch.randperm(total_weights, generator=g)[:num_fixed]
-                    flat_mask = torch.zeros(total_weights)
-                    flat_mask[indices] = 1
-                    mask[i] = flat_mask.view(in_channels, kernel_size, kernel_size)
-        
-        return mask
-    
-    def _conv_normal_mask(self, out_channels, in_channels, kernel_size, mask_num):
-        """Create normal mask for initialization."""
-        g = torch.Generator()
-        g.manual_seed(abs(hash(str(mask_num) + 'conv_normal')))
-        return torch.randn(out_channels, in_channels, kernel_size, kernel_size, generator=g)
-    
     def reset_parameters(self):
-        """Initialize parameters."""
         nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
-        self.weight.data = (self.weight.data * self.mask + 
-                           (1 - self.mask) * self.mask_constant * self.normal_mask)
+        self.weight.data = (self.weight.data * self.mask + (1-self.mask) * self.mask_constant * self.normal_mask)
         
         if self.bias is not None:
             fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weight)
@@ -96,9 +69,9 @@ class SparseConv2d(nn.Module):
             nn.init.uniform_(self.bias, -bound, bound)
     
     def forward(self, x):
-        self.weight.data = (self.weight.data * self.mask + 
-                           (1 - self.mask) * self.mask_constant * self.normal_mask)
-        return F.conv2d(x, self.weight, bias=self.bias, stride=self.stride, padding=self.padding)
+        self.weight.data = (self.weight.data * self.mask + (1-self.mask) * self.mask_constant * self.normal_mask)
+        out = F.conv2d(x, self.weight, stride=self.stride, padding=self.padding)
+        return out
     
     def count_unused_params(self):
         """Count unused parameters due to masking."""
@@ -245,7 +218,7 @@ class WResNet(nn.Module):
                                      stride=2, mask_params=mask_params['conv_3'])
         mask_num += num_blocks[2] * 3
 
-        self.linear = nn.Linear(64*w, num_classes)
+        self.linear = SparseLinear(64*w, num_classes, mask_num=mask_num, bias=False, **mask_params['linear'])
         self.apply(_weights_init)
 
     def _make_layer(self, block, mask_num, planes, num_blocks, stride, mask_params):
@@ -260,10 +233,10 @@ class WResNet(nn.Module):
     def count_unused_params(self):
         """Count unused parameters due to masking."""
         count = 0
-        for module in self.modules():
-            if hasattr(module, 'count_unused_params'):
-                count += module.count_unused_params()
-        return count
+        for node in self.modules():
+            if hasattr(node, 'mask'):
+                count += (1-node.mask).sum()
+        return count.item()
 
     def forward(self, x):
         out = F.relu(self.ln1(self.conv1(x)))
@@ -364,3 +337,178 @@ def create_resnet(symmetry, depth, w=1, mask_params=None, num_classes=10, fixed_
             raise ValueError(f"Invalid depth: {depth}")
     else:
         raise ValueError(f"Invalid symmetry type: {symmetry}")
+
+
+# Original LMC mask generation functions
+def make_conv_mask(in_channels, out_channels, kernel_size, mask_num, mask_type='random_subsets', num_fixed=6):
+    """Create sparse mask for convolution (original LMC implementation)."""
+    if mask_type == 'densest':
+        mask = torch.ones(size=(out_channels, in_channels, kernel_size, kernel_size))
+        weights_per_out_channel = in_channels * kernel_size**2
+        flattened_to_3d_index = lambda ind: (ind // kernel_size**2, (ind//kernel_size)%kernel_size, ind%kernel_size)
+        out_channel_idx = 1
+        if out_channels == 1:
+            return mask
+
+        for nz in range(1, weights_per_out_channel):
+            for zeros_in_out_channel in itertools.combinations(range(weights_per_out_channel), nz):
+                for zero_ind in map(flattened_to_3d_index, zeros_in_out_channel):
+                    mask[out_channel_idx][zero_ind] = 0
+                out_channel_idx += 1
+                if out_channel_idx >= out_channels:
+                    return mask
+
+    elif mask_type == 'bound_zeros':
+        mask = torch.ones(size=(out_channels, in_channels, kernel_size, kernel_size))
+        weights_per_out_channel = in_channels * kernel_size**2
+        flattened_to_3d_index = lambda ind: (ind // kernel_size**2, (ind//kernel_size)%kernel_size, ind%kernel_size)
+        out_channel_idx = 0
+        least_zeros = num_fixed
+        for nz in range(least_zeros, weights_per_out_channel):
+            for zeros_in_out_channel in itertools.combinations(range(weights_per_out_channel), nz):
+                for zero_ind in map(flattened_to_3d_index, zeros_in_out_channel):
+                    mask[out_channel_idx][zero_ind] = 0
+                out_channel_idx += 1
+                if out_channel_idx >= out_channels:
+                    return mask
+
+    elif mask_type == 'random_subsets':
+        mask = torch.ones(size=(out_channels, in_channels, kernel_size, kernel_size))
+        weights_per_out_channel = in_channels * kernel_size**2
+        least_zeros = num_fixed
+
+        flattened_to_3d_index = lambda ind: (ind // kernel_size**2, (ind//kernel_size)%kernel_size, ind%kernel_size)
+        for out_channel_idx in range(out_channels):
+            zeros_in_out_channel = get_subset(weights_per_out_channel, out_channel_idx, least_zeros, mask_num)
+            for zero_ind in map(flattened_to_3d_index, zeros_in_out_channel):
+                mask[out_channel_idx][zero_ind] = 0
+        return mask
+    elif mask_type == 'filter_random_subsets':
+        mask = torch.ones(size=(out_channels, in_channels, kernel_size, kernel_size))
+        least_zeros = num_fixed
+        
+        for out_channel_idx in range(out_channels):
+            zeros_in_out_channel = get_subset(in_channels, out_channel_idx, least_zeros, mask_num)
+            for zero_ind in zeros_in_out_channel:
+                mask[out_channel_idx, zero_ind, :, :] = 0
+        return mask
+    elif mask_type == 'none':
+        return torch.ones(size=(out_channels, in_channels, kernel_size, kernel_size))
+
+
+def conv_normal_mask(out_channels, in_channels, kernel_size, mask_num):
+    """Create normal mask for initialization (original LMC implementation)."""
+    g = torch.Generator()
+    g.manual_seed(abs(hash(str(mask_num) + str(0))))
+    return torch.randn(size=(out_channels, in_channels, kernel_size, kernel_size), generator=g)
+
+
+def get_subset(num_cols, row_idx, num_sample, mask_num):
+    """Get random subset of indices (original LMC implementation)."""
+    g = torch.Generator()
+    g.manual_seed(row_idx + abs(hash(str(mask_num))))
+    indices = torch.arange(num_cols)
+    return (indices[torch.randperm(num_cols, generator=g)[:num_sample]])
+
+
+def make_mask(in_dim, out_dim, mask_num=0, num_fixed=6, mask_type='densest'):
+    """Create mask for linear layers (original LMC implementation)."""
+    # out_dim x in_dim matrix
+    # where each row is unique
+    assert out_dim < 2**(in_dim)
+    assert in_dim > 0 and out_dim > 0
+
+    if mask_type == 'densest':
+        mask = torch.ones(out_dim, in_dim)
+        mask[0, :] = 1  # first row is dense
+        row_idx = 1
+        if out_dim == 1:
+            return mask
+
+        for nz in range(1, in_dim):
+            for zeros_in_row in itertools.combinations(range(in_dim), nz):
+                mask[row_idx, zeros_in_row] = 0
+                row_idx += 1
+                if row_idx >= out_dim:
+                    return mask
+    elif mask_type == 'bound_zeros':
+        # other type of mask based on lower bounding sparsity to break symmetries more
+        mask = torch.ones(out_dim, in_dim)
+        least_zeros = 2
+        row_idx = 0
+        for nz in range(least_zeros, in_dim):
+            for zeros_in_row in itertools.combinations(range(in_dim), nz):
+                mask[row_idx, zeros_in_row] = 0
+                row_idx += 1
+                if row_idx >= out_dim:
+                    return mask
+
+        raise ValueError('Error in making mask, possibly because out_dim is too large for these settings')
+
+    elif mask_type == 'random_subsets':
+        # other type of mask based on lower bounding sparsity to break symmetries more
+        mask = torch.ones(out_dim, in_dim)
+        row_idx = 0
+        least_zeros = num_fixed
+        for nz in range(least_zeros, in_dim):
+            while True:
+                zeros_in_row = get_subset(in_dim, row_idx, least_zeros, mask_num)
+                mask[row_idx, zeros_in_row] = 0
+                row_idx += 1
+                if row_idx >= out_dim:
+                    return mask
+
+        raise ValueError('Error in making mask, possibly because out_dim is too large for these settings')
+    else:
+        raise ValueError('Invalid mask type')
+
+
+def normal_mask(out_dim, in_dim, mask_num):
+    """Create normal mask for linear layers (original LMC implementation)."""
+    g = torch.Generator()
+    g.manual_seed(abs(hash(str(mask_num))))
+    return torch.randn(size=(out_dim, in_dim), generator=g)
+
+
+class SparseLinear(nn.Module):
+    """Sparse linear layer matching original LMC implementation."""
+    def __init__(self, in_dim, out_dim, bias=True, mask_type='densest', mask_constant=1, mask_num=0, num_fixed=6, do_normal_mask=True):
+        super().__init__()
+        assert out_dim < 2**in_dim, 'out dim cannot be much higher than in dim'
+        mask = make_mask(in_dim, out_dim, mask_type=mask_type, num_fixed=num_fixed, mask_num=mask_num)
+
+        self.register_buffer('mask', mask, persistent=True)
+        self.weight = nn.Parameter(torch.empty((out_dim, in_dim)))
+
+        if do_normal_mask:
+            self.register_buffer('normal_mask', normal_mask(out_dim, in_dim, mask_num), persistent=True)
+        else:
+            self.register_buffer('normal_mask', torch.ones(size=(out_dim, in_dim)), persistent=True)
+
+        self.weight.register_hook(lambda grad: self.mask*grad) # zeros out gradients for masked parts
+
+        if bias:
+            self.bias = nn.Parameter(torch.empty(out_dim))
+        else:
+            self.register_parameter('bias', None)
+
+        self.mask_constant = mask_constant
+        self.mask_num = mask_num
+        self.num_fixed = num_fixed
+        self.reset_parameters()
+    
+    def reset_parameters(self):
+        nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        self.weight.data = (self.weight.data * self.mask + (1-self.mask) * self.mask_constant * self.normal_mask)
+
+        if self.bias is not None:
+            fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weight)
+            bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
+            nn.init.uniform_(self.bias, -bound, bound)
+
+    def forward(self, x):
+        self.weight.data = (self.weight.data * self.mask + (1-self.mask) * self.mask_constant * self.normal_mask)
+        return F.linear(x, (self.weight), self.bias)
+
+    def count_unused_params(self):
+        return (1-self.mask.int()).sum().item()

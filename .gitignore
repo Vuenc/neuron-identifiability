@@ -13,3 +13,4 @@ outputs
 sbatch
 .vscode
 wandb
+data

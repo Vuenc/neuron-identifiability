@@ -8,6 +8,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 from ..core.registry import register
+from .normalization import total_output_variances_init, setup_normalization
+from .activation import setup_activation
 
 
 class AsymSwiGLU(nn.Module):
@@ -83,89 +85,107 @@ class SparseLinear(nn.Module):
     
     def reset_parameters(self):
         with torch.no_grad():
-            # Initialize weights randomly, then apply mask and normal_mask
-            nn.init.normal_(self.weight, mean=0.0, std=1.0 / math.sqrt(self.weight.size(1)))
+            # # Initialize weights randomly, then apply mask and normal_mask
+            # nn.init.normal_(self.weight, mean=0.0, std=1.0 / math.sqrt(self.weight.size(1)))
+            # self.weight.mul_(self.mask).add_((1 - self.mask) * self.mask_constant * self.normal_mask)
+            # if self.bias is not None:
+            #     nn.init.zeros_(self.bias)
+            d_in = self.weight.size(1)
+            nn.init.normal_(self.weight, mean=0.0, std=1.0 / math.sqrt(d_in))
             self.weight.mul_(self.mask).add_((1 - self.mask) * self.mask_constant * self.normal_mask)
             if self.bias is not None:
-                nn.init.zeros_(self.bias)
+                fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weight)
+                bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
+                nn.init.uniform_(self.bias, -bound, bound)
     
     def forward(self, x):
-        # Apply mask and normal_mask like in the original implementation
-        self.weight.data = (self.weight.data * self.mask + (1 - self.mask) * self.mask_constant * self.normal_mask)
-        return F.linear(x, self.weight, self.bias)
+        # # Apply mask and normal_mask like in the original implementation
+        # self.weight.data = (self.weight.data * self.mask + (1 - self.mask) * self.mask_constant * self.normal_mask)
+        # return F.linear(x, self.weight, self.bias)
+        if self.__dict__.get("disable_sparse_linear_data_replacement", False):
+            return F.linear(x, self.weight * self.mask.detach() + (1 - self.mask.detach()) * self.mask_constant * self.normal_mask, self.bias)
+        else:
+            self.weight.data = (self.weight.data * self.mask + (1 - self.mask) * self.mask_constant * self.normal_mask) 
+            return F.linear(x, self.weight, self.bias)
 
 
 @register('model', 'mlp_standard')
 class MLP(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim, num_layers, norm='layer'):
+    def __init__(self, input_dim, hidden_dim, output_dim, num_layers, norm='layer', 
+                 mask_params=None, fixed_masks=None, elementwise_affine=True, activation='relu'):
         super().__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.output_dim = output_dim
         self.num_layers = num_layers
-        
-        self.lins = nn.ModuleList()
-        self.norms = nn.ModuleList()
-        
-        if num_layers == 1:
-            self.lins.append(nn.Linear(input_dim, output_dim))
-        else:
-            self.lins.append(nn.Linear(input_dim, hidden_dim))
-            if norm == 'layer':
-                self.norms.append(nn.LayerNorm(hidden_dim))
-            elif norm == 'batch':
-                self.norms.append(nn.BatchNorm1d(hidden_dim))
-            
-            for _ in range(num_layers - 2):
-                self.lins.append(nn.Linear(hidden_dim, hidden_dim))
-                if norm == 'layer':
-                    self.norms.append(nn.LayerNorm(hidden_dim))
-                elif norm == 'batch':
-                    self.norms.append(nn.BatchNorm1d(hidden_dim))
-            
-            self.lins.append(nn.Linear(hidden_dim, output_dim))
-        
-        self.norm_type = norm
-    
-    def forward(self, x):
-        for i in range(len(self.lins) - 1):
-            x = self.lins[i](x)
-            if self.norm_type:
-                x = self.norms[i](x)
-            x = F.relu(x)
-        
-        x = self.lins[-1](x)
-        return x
-
-
-@register('model', 'mlp_w_asym')
-class WMLP(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim, num_layers, 
-                 mask_params, norm='layer', fixed_masks=None):
-        super().__init__()
-        self.input_dim = input_dim
-        self.hidden_dim = hidden_dim
-        self.output_dim = output_dim
-        self.num_layers = num_layers
+        self.activation = activation
         
         self.lins = nn.ModuleList()
         self.norms = nn.ModuleList()
         
         # Handle normalization
         self.norm_kind = norm
-        if not norm:
-            self.norm = None
+        self.norm = setup_normalization(norm, hidden_dim, elementwise_affine)
+        
+        # Handle activation
+        self.activation_func = setup_activation(activation)
+        
+        if num_layers == 1:
+            self.lins.append(nn.Linear(input_dim, output_dim))
         else:
-            if norm == 'layer':
-                self.norm = nn.LayerNorm
-            elif norm == 'batch':
-                self.norm = nn.BatchNorm1d
-            elif norm == 'layer_linear':
-                self.norm = LayerNormLinearProxyWMLP
-            elif norm == 'batch_linear':
-                self.norm = BatchNormLinearProxyWMLP
-            else:
-                raise ValueError(f"Bad norm type: {norm}")
+            self.lins.append(nn.Linear(input_dim, hidden_dim))
+            
+            for i in range(num_layers - 2):
+                self.lins.append(nn.Linear(hidden_dim, hidden_dim))
+            
+            self.lins.append(nn.Linear(hidden_dim, output_dim))
+            
+            # Add normalization layers
+            if self.norm_kind in ('layer', 'batch'):
+                for i in range(num_layers - 1):
+                    self.norms.append(self.norm(hidden_dim))
+            elif self.norm_kind in ('layer_linear', 'batch_linear'):
+                for i in range(num_layers - 1):
+                    v = total_output_variances_init(self.lins[i], use_realized_F=True)
+                    self.norms.append(self.norm(v))
+        
+        self.norm_type = norm
+    
+    def forward(self, x):
+        x = x.view(x.size(0), -1)  # Flatten the input
+        
+        for i in range(len(self.lins) - 1):
+            x = self.lins[i](x)
+            if self.norm_type:
+                x = self.norms[i](x)
+            if self.activation_func:
+                x = self.activation_func(x)
+        
+        x = self.lins[-1](x)
+        return x
+    
+
+
+@register('model', 'mlp_w_asym')
+class WMLP(nn.Module):
+    def __init__(self, input_dim, hidden_dim, output_dim, num_layers, 
+                 mask_params=None, norm='layer', fixed_masks=None, elementwise_affine=True, activation='gelu'):
+        super().__init__()
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.output_dim = output_dim
+        self.num_layers = num_layers
+        self.activation = activation
+        
+        self.lins = nn.ModuleList()
+        self.norms = nn.ModuleList()
+        
+        # Handle normalization
+        self.norm_kind = norm
+        self.norm = setup_normalization(norm, hidden_dim, elementwise_affine)
+        
+        # Handle activation
+        self.activation_func = setup_activation(activation)
         
         def get_mask_params(layer_idx, default_params=None):
             if default_params is None:
@@ -190,13 +210,13 @@ class WMLP(nn.Module):
             self.lins.append(SparseLinear(input_dim, output_dim, 
                                         mask_num=0, fixed_mask=fixed_mask, **get_mask_params(0)))
         else:
-            first_layer_params = get_mask_params(0)
+            first_layer_params = get_mask_params(0, mask_params.get('default', None))
             fixed_mask = fixed_masks.get('lins.0') if fixed_masks else None
             self.lins.append(SparseLinear(input_dim, hidden_dim, 
                                         mask_num=0, fixed_mask=fixed_mask, **first_layer_params))
             
             for i in range(num_layers - 2):
-                hidden_layer_params = get_mask_params(i+1)
+                hidden_layer_params = get_mask_params(i+1, mask_params.get('default', None))
                 fixed_mask = fixed_masks.get(f'lins.{i+1}') if fixed_masks else None
                 self.lins.append(SparseLinear(hidden_dim, hidden_dim, 
                                             mask_num=i+1, fixed_mask=fixed_mask, **hidden_layer_params))
@@ -224,10 +244,12 @@ class WMLP(nn.Module):
             x = self.lins[i](x)
             if self.norm_type:
                 x = self.norms[i](x)
-            x = F.gelu(x)
+            if self.activation_func:
+                x = self.activation_func(x)
         
         x = self.lins[-1](x)
         return x
+    
     
     def count_unused_params(self):
         count = 0
@@ -292,84 +314,18 @@ class SigmaMLP(nn.Module):
         return x
 
 
-@torch.no_grad()
-def total_output_variances_init(lin, use_realized_F: bool = False, eps: float = 1e-12):
-    """
-    Per-output variances at init under Cov[x]=I.
-
-    - SparseLinear:
-        v_i ≈ (frozen) + (trainable at init)
-            frozen:
-              * if use_realized_F: sum_j [ (1-mask_ij) * (mask_constant * normal_mask_ij) ]^2
-              * else:              n_frozen_i * kappa,  with kappa = mask_constant^2
-            trainable: n_train_i / d_in   (LeCun/fan-in init: Var = 1/d_in)
-    - nn.Linear:
-        v_i = 1  (LeCun/fan-in init), independent of weights.
-
-    Returns:
-        Tensor of shape (out_dim,) on lin.weight's device/dtype.
-    """
-    W = lin.weight
-    out_dim, d_in = W.size(0), W.size(1)
-    dev, dt = W.device, W.dtype
-
-    if hasattr(lin, "mask") and hasattr(lin, "mask_constant"):
-        frozen = (1.0 - lin.mask)
-        n_frozen = frozen.sum(dim=1)
-        n_train  = lin.mask.sum(dim=1)
-        kappa = float(lin.mask_constant) ** 2
-
-        if use_realized_F:
-            F_ij = lin.mask_constant * lin.normal_mask
-            v_frozen = (frozen * F_ij).pow(2).sum(dim=1)
-        else:
-            v_frozen = n_frozen * kappa
-
-        sigma_w2 = 1.0 / float(d_in)
-        v_train = n_train * sigma_w2
-        v = v_frozen + v_train
-        return v.to(device=dev, dtype=dt) + eps
-
-    else:
-        return torch.ones(out_dim, device=dev, dtype=dt) + eps
-
-
-class LayerNormLinearProxyWMLP(nn.Module):
-    """Linear proxy for LayerNorm in W-Asymmetric MLPs."""
-    
-    def __init__(self, v: torch.Tensor, eps: float = 1e-12):
-        super().__init__()
-        d = v.numel()
-        sample_var = (1.0 - 1.0 / d) * v.mean()
-        scale = (sample_var + eps).rsqrt()
-        self.register_buffer("scale", scale)
-
-    def forward(self, z):
-        return (z - z.mean(dim=-1, keepdim=True)) * self.scale
-
-
-class BatchNormLinearProxyWMLP(nn.Module):
-    """Linear proxy for BatchNorm in W-Asymmetric MLPs."""
-    
-    def __init__(self, v: torch.Tensor, eps: float = 1e-12):
-        super().__init__()
-        inv_std = (v + eps).rsqrt().to(torch.float32)
-        self.register_buffer("inv_std", inv_std)
-
-    def forward(self, z):
-        view = [1] * z.ndim
-        view[-1] = z.shape[-1]
-        return z * self.inv_std.view(*view)
-
-
 def create_mlp(symmetry, input_dim, hidden_dim, output_dim, num_layers, 
-               mask_params=None, norm='layer', fixed_masks=None):
+               mask_params=None, norm='layer', fixed_masks=None, elementwise_affine=True, activation=None):
     if symmetry == 0:
-        return MLP(input_dim, hidden_dim, output_dim, num_layers, norm)
+        activation = activation or 'relu'
+        return MLP(input_dim, hidden_dim, output_dim, num_layers, norm, 
+                  mask_params, fixed_masks, elementwise_affine, activation)
     elif symmetry == 1:
         if mask_params is None:
             raise ValueError("mask_params required for W-Asym MLP")
-        return WMLP(input_dim, hidden_dim, output_dim, num_layers, mask_params, norm, fixed_masks)
+        activation = activation or 'gelu'
+        return WMLP(input_dim, hidden_dim, output_dim, num_layers, mask_params, norm, 
+                   fixed_masks, elementwise_affine, activation)
     elif symmetry == 2:
         return SigmaMLP(input_dim, hidden_dim, output_dim, num_layers, norm, fixed_masks)
     else:

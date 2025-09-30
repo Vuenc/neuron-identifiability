@@ -1,7 +1,7 @@
 # @package training
 num_epochs: 100
 val_every: 1
-save_every: null
+save_every: 10  # Save checkpoints every 10 epochs
 save_path: null
 early_stopping:
   patience: 10
@@ -13,5 +13,7 @@ save_params_every: null  # Save parameters every N epochs (null = disabled)
 
 # Cosine similarity analysis (for multi-model training with 2 models)
 cosine_similarity:
-  enabled: false  # Enable cosine similarity computation between model updates
+  enabled: true   # Enable cosine similarity computation between model updates
   save_every: 1   # Compute cosine similarity every N epochs (1 = every epoch)
+
+

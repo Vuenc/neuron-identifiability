@@ -36,7 +36,7 @@ def interpolate_test(model1, model2, test_fn, steps=25, rewarm=False, data=None)
     print(f'Distance / params: {dist / num_params:.6f}')
     
     results = []
-    lambdas = torch.linspace(0, 1, steps=steps)
+    lambdas = torch.linspace(0, 1, steps=steps+1)
     
     for i, lam in enumerate(lambdas):
         # Interpolate parameters
@@ -68,7 +68,10 @@ def lerp_sd(lam, sd1, sd2):
     """Linear interpolation between two state dictionaries."""
     sd3 = copy.deepcopy(sd1)
     for name in sd1:
-        sd3[name] = (1 - lam) * sd1[name] + lam * sd2[name]
+        # Only interpolate float parameters, skip integer parameters like num_batches_tracked
+        if sd1[name].dtype.is_floating_point:
+            sd3[name] = (1 - lam) * sd1[name] + lam * sd2[name]
+        # For non-float parameters, keep the first model's values
     return sd3
 
 
@@ -108,6 +111,9 @@ def compute_barrier(results):
     # Barrier is the relative drop from the higher endpoint to the minimum point
     # Positive = hill (min > max), Negative = valley/barrier (min < max)
     max_endpoint = max(start_acc, end_acc)
+    if max_endpoint == 0:
+        # If both endpoints have 0 accuracy, return 0 barrier
+        return 0.0
     barrier = (min_acc - max_endpoint) / max_endpoint * 100
     return barrier
 
@@ -195,8 +201,8 @@ def evaluate_model_comprehensive(model, train_loader, val_loader, test_loader, d
     return results
 
 
-def interpolate_models_comprehensive(model1, model2, train_loader, val_loader, test_loader, 
-                                   steps=25, device='cuda'):
+def interpolate_models(model1, model2, train_loader, val_loader, test_loader, 
+                                   steps=25, device='cuda', use_wandb=False):
     """Perform comprehensive interpolation between two models.
     
     Args:
@@ -207,6 +213,7 @@ def interpolate_models_comprehensive(model1, model2, train_loader, val_loader, t
         test_loader: Test data loader
         steps: Number of interpolation steps
         device: Device to run evaluation on
+        use_wandb: Whether to log to wandb
         
     Returns:
         Dictionary with interpolation results
@@ -237,7 +244,7 @@ def interpolate_models_comprehensive(model1, model2, train_loader, val_loader, t
         'num_params': num_params
     }
     
-    lambdas = torch.linspace(0, 1, steps=steps)
+    lambdas = torch.linspace(0, 1, steps=steps+1)
     
     for i, lam in enumerate(lambdas):
         # Interpolate parameters
@@ -252,8 +259,27 @@ def interpolate_models_comprehensive(model1, model2, train_loader, val_loader, t
         val_acc = metrics.get('val_accuracy', 0.0)
         train_loss = metrics.get('train_loss', 0.0)
         val_loss = metrics.get('val_loss', 0.0)
+        test_acc = metrics.get('test_accuracy', 0.0)
+        test_loss = metrics.get('test_loss', 0.0)
         
-        print(f'Step {i+1:2d}/{steps} (λ={lam:.3f}): Train Acc={train_acc:.2f}%, Val Acc={val_acc:.2f}%, Train Loss={train_loss:.4f}, Val Loss={val_loss:.4f}')
+        print(f'Step {i+1:2d}/{steps+1} (λ={lam:.3f}): Train Acc={train_acc:.2f}%, Val Acc={val_acc:.2f}%, Train Loss={train_loss:.4f}, Val Loss={val_loss:.4f}')
+        
+        # Log to wandb if enabled
+        if use_wandb:
+            try:
+                import wandb
+                if wandb.run is not None:
+                    wandb.log({
+                        'interpolation_lambda': lam.item(),
+                        'interpolation_train_loss': train_loss,
+                        'interpolation_train_accuracy': train_acc,
+                        'interpolation_val_loss': val_loss,
+                        'interpolation_val_accuracy': val_acc,
+                        'interpolation_test_loss': test_loss,
+                        'interpolation_test_accuracy': test_acc,
+                    })
+            except ImportError:
+                print("Warning: wandb not available for logging")
         
         # Store results
         results['lambdas'].append(lam.item())
@@ -261,8 +287,8 @@ def interpolate_models_comprehensive(model1, model2, train_loader, val_loader, t
         results['train_accuracy'].append(train_acc)
         results['val_loss'].append(val_loss)
         results['val_accuracy'].append(val_acc)
-        results['test_loss'].append(metrics.get('test_loss', 0.0))
-        results['test_accuracy'].append(metrics.get('test_accuracy', 0.0))
+        results['test_loss'].append(test_loss)
+        results['test_accuracy'].append(test_acc)
     
     # Restore original state
     model1.load_state_dict(state1)
@@ -285,7 +311,7 @@ def interpolate_models_comprehensive(model1, model2, train_loader, val_loader, t
     return results
 
 
-def evaluate_midpoint_models(models, train_loader, val_loader, test_loader, device='cuda'):
+def evaluate_midpoint_models(models, train_loader, val_loader, test_loader, device='cuda', use_wandb=False):
     """Evaluate the midpoint (center) of multiple models.
     
     Args:
@@ -294,6 +320,7 @@ def evaluate_midpoint_models(models, train_loader, val_loader, test_loader, devi
         val_loader: Validation data loader
         test_loader: Test data loader
         device: Device to run evaluation on
+        use_wandb: Whether to log to wandb
         
     Returns:
         Dictionary with midpoint evaluation results
@@ -313,11 +340,14 @@ def evaluate_midpoint_models(models, train_loader, val_loader, test_loader, devi
     for model in models[1:]:
         state = model.state_dict()
         for key in avg_state.keys():
-            avg_state[key] += state[key]
+            # Only average float parameters, skip integer parameters like num_batches_tracked
+            if avg_state[key].dtype.is_floating_point:
+                avg_state[key] += state[key]
     
-    # Normalize by number of models
+    # Normalize by number of models (only float parameters)
     for key in avg_state.keys():
-        avg_state[key] /= len(models)
+        if avg_state[key].dtype.is_floating_point:
+            avg_state[key] /= len(models)
     
     # Load average state into base model
     base_model.load_state_dict(avg_state)
@@ -328,6 +358,23 @@ def evaluate_midpoint_models(models, train_loader, val_loader, test_loader, devi
     # Add metadata
     results['num_models'] = len(models)
     results['evaluation_type'] = 'midpoint'
+    
+    # Log to wandb if enabled
+    if use_wandb:
+        try:
+            import wandb
+            if wandb.run is not None:
+                wandb.log({
+                    'midpoint_evaluation/train_loss': results.get('train_loss', 0.0),
+                    'midpoint_evaluation/train_accuracy': results.get('train_accuracy', 0.0),
+                    'midpoint_evaluation/val_loss': results.get('val_loss', 0.0),
+                    'midpoint_evaluation/val_accuracy': results.get('val_accuracy', 0.0),
+                    'midpoint_evaluation/test_loss': results.get('test_loss', 0.0),
+                    'midpoint_evaluation/test_accuracy': results.get('test_accuracy', 0.0),
+                    'midpoint_evaluation/num_models': len(models),
+                })
+        except ImportError:
+            print("Warning: wandb not available for logging")
     
     # Restore original state
     base_model.load_state_dict(base_state)
@@ -359,7 +406,7 @@ def load_model_checkpoint(checkpoint_path, model_class, model_kwargs, device='cu
 
 def evaluate_checkpoint_interpolation(checkpoint_paths, model_class, model_kwargs, 
                                     train_loader, val_loader, test_loader, 
-                                    interpolation_type='grid', steps=25, device='cuda'):
+                                    interpolation_type='grid', steps=25, device='cuda', use_wandb=False):
     """Evaluate interpolation between model checkpoints.
     
     Args:
@@ -372,6 +419,7 @@ def evaluate_checkpoint_interpolation(checkpoint_paths, model_class, model_kwarg
         interpolation_type: 'grid' for 2 models, 'midpoint' for >2 models
         steps: Number of interpolation steps (for grid)
         device: Device to run evaluation on
+        use_wandb: Whether to log to wandb
         
     Returns:
         Dictionary with interpolation results
@@ -384,13 +432,13 @@ def evaluate_checkpoint_interpolation(checkpoint_paths, model_class, model_kwarg
     
     if interpolation_type == 'grid' and len(models) == 2:
         # Grid interpolation between 2 models
-        return interpolate_models_comprehensive(
-            models[0], models[1], train_loader, val_loader, test_loader, steps, device
+        return interpolate_models(
+            models[0], models[1], train_loader, val_loader, test_loader, steps, device, use_wandb
         )
     elif len(models) >= 2:
         # Midpoint evaluation for multiple models
         return evaluate_midpoint_models(
-            models, train_loader, val_loader, test_loader, device
+            models, train_loader, val_loader, test_loader, device, use_wandb
         )
     else:
         raise ValueError(f"Invalid number of models: {len(models)}")
