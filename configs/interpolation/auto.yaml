@@ -2,3 +2,4 @@
 enabled: true
 type: auto  # Auto-choose: grid for 2 models, midpoint for 3+ models
 steps: 10  # Number of interpolation steps (for grid)
+save_every: null  # Run interpolation every N epochs (null = only at end)

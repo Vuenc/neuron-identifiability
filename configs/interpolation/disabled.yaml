@@ -2,3 +2,4 @@
 enabled: false
 type: auto  # Ignored when disabled
 steps: 25  # Ignored when disabled
+save_every: null  # Ignored when disabled

@@ -1,0 +1,22 @@
+# @package training
+num_epochs: 50
+val_every: 1
+save_every: 5  # Save checkpoints every 5 epochs
+save_path: null
+early_stopping: null
+
+# Gradient and parameter saving (set to null to disable)
+save_grad_every: null  # Save gradients every N epochs (null = disabled)
+save_params_every: null  # Save parameters every N epochs (null = disabled)
+
+# Cosine similarity analysis (for multi-model training with 2 models)
+cosine_similarity:
+  enabled: true   # Enable cosine similarity computation between model updates
+  save_every: 5   # Compute cosine similarity every 5 epochs
+
+# Interval-based interpolation analysis
+interpolation:
+  enabled: true
+  type: auto  # Auto-choose: grid for 2 models, midpoint for 3+ models
+  steps: 10  # Number of interpolation steps (for grid)
+  save_every: 10  # Run interpolation every 10 epochs

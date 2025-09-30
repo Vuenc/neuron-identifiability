@@ -2,3 +2,4 @@
 enabled: true
 type: grid  # Full grid interpolation between 2 models
 steps: 10  # Number of interpolation steps
+save_every: null  # Run interpolation every N epochs (null = only at end)

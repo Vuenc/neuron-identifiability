@@ -27,9 +27,9 @@ def compute_parameter_updates(model: nn.Module,
     return updates
 
 
-def compute_cosine_similarity_per_layer(updates1: Dict[str, torch.Tensor], 
-                                      updates2: Dict[str, torch.Tensor],
-                                      trainable: List[str]) -> Dict[str, float]:
+def compute_cossim_per_layer(updates1: Dict[str, torch.Tensor], 
+                            updates2: Dict[str, torch.Tensor],
+                            trainable: List[str]) -> Dict[str, float]:
     """
     Compute cosine similarity between parameter updates for each layer.
     
@@ -60,9 +60,9 @@ def compute_cosine_similarity_per_layer(updates1: Dict[str, torch.Tensor],
     return similarities
 
 
-def compute_cosine_similarity_aggregate(updates1: Dict[str, torch.Tensor], 
-                                      updates2: Dict[str, torch.Tensor],
-                                      trainable: List[str]) -> float:
+def compute_cossim_aggregate(updates1: Dict[str, torch.Tensor], 
+                           updates2: Dict[str, torch.Tensor],
+                           trainable: List[str]) -> float:
     """
     Compute cosine similarity between all parameter updates aggregated.
     
@@ -90,10 +90,10 @@ def compute_cosine_similarity_aggregate(updates1: Dict[str, torch.Tensor],
         return 0.0
 
 
-def compute_cosine_similarity_analysis(model1: nn.Module, 
-                                     model2: nn.Module,
-                                     initial_params1: Dict[str, torch.Tensor],
-                                     initial_params2: Dict[str, torch.Tensor]) -> Dict[str, any]:
+def compute_cossim_analysis(model1: nn.Module, 
+                          model2: nn.Module,
+                          initial_params1: Dict[str, torch.Tensor],
+                          initial_params2: Dict[str, torch.Tensor]) -> Dict[str, any]:
     """
     Compute comprehensive cosine similarity analysis between two models.
     
@@ -111,10 +111,10 @@ def compute_cosine_similarity_analysis(model1: nn.Module,
     updates2 = compute_parameter_updates(model2, initial_params2)
     
     # Compute per-layer similarities
-    per_layer_similarities = compute_cosine_similarity_per_layer(updates1, updates2, model1['trainable'])
+    per_layer_similarities = compute_cossim_per_layer(updates1, updates2, model1['trainable'])
     
     # Compute aggregate similarity
-    aggregate_similarity = compute_cosine_similarity_aggregate(updates1, updates2, model1['trainable'])
+    aggregate_similarity = compute_cossim_aggregate(updates1, updates2, model1['trainable'])
     
     # Compute statistics
     layer_similarities = list(per_layer_similarities.values())
@@ -130,10 +130,10 @@ def compute_cosine_similarity_analysis(model1: nn.Module,
     }
 
 
-def save_cosine_similarity_results(results: Dict[str, any], 
-                                 output_dir: str, 
-                                 epoch: int, 
-                                 step: int) -> str:
+def save_cossim_results(results: Dict[str, any], 
+                       output_dir: str, 
+                       epoch: int, 
+                       step: int) -> str:
     """
     Save cosine similarity results to file.
     
@@ -152,7 +152,7 @@ def save_cosine_similarity_results(results: Dict[str, any],
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     
-    filename = f"cosine_similarity_epoch_{epoch}_step_{step}.pt"
+    filename = f"cossim_epoch_{epoch}_step_{step}.pt"
     filepath = output_path / filename
     
     torch.save({
