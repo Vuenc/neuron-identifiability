@@ -249,9 +249,9 @@ class Trainer:
         avg_loss = total_loss / len(data_loader)
         
         results = {
-            f'{prefix}loss': avg_loss,
-            f'{prefix}accuracy': accuracy,
-            **{f'{prefix}{k}': v for k, v in metrics_results.items()}
+            f'{prefix}_loss': avg_loss,
+            f'{prefix}_accuracy': accuracy,
+            **{f'{prefix}_{k}': v for k, v in metrics_results.items()}
         }
         
         return results
@@ -319,7 +319,7 @@ class Trainer:
             
             # Validation
             if epoch % val_every == 0 or epoch == num_epochs - 1:
-                val_metrics = self.evaluate(self.val_loader, 'val_')
+                val_metrics = self.evaluate(self.val_loader, 'val')
                 history['val_loss'].append(val_metrics['val_loss'])
                 history['val_accuracy'].append(val_metrics['val_accuracy'])
                 
@@ -365,7 +365,7 @@ class Trainer:
             global_step += len(self.train_loader) if self.train_loader is not None else 1
         
         # Final evaluation on test set
-        test_metrics = self.evaluate(self.test_loader, 'test_')
+        test_metrics = self.evaluate(self.test_loader, 'test')
         history['test_loss'].append(test_metrics['test_loss'])
         history['test_accuracy'].append(test_metrics['test_accuracy'])
         
