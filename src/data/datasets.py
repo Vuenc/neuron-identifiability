@@ -1,7 +1,3 @@
-"""
-Dataset loading and creation utilities.
-"""
-
 import torch
 from torch.utils.data import DataLoader, random_split
 from torchvision import datasets, transforms
@@ -20,7 +16,6 @@ except ImportError:
 
 @register('dataset', 'mnist')
 def create_mnist_dataset(data_dir='./data', train=True, transform=None):
-    """Create MNIST dataset."""
     if transform is None:
         transform = transforms.Compose([
             transforms.ToTensor(),
@@ -32,7 +27,6 @@ def create_mnist_dataset(data_dir='./data', train=True, transform=None):
 
 @register('dataset', 'cifar10')
 def create_cifar10_dataset(data_dir='./data', train=True, transform=None):
-    """Create CIFAR-10 dataset."""
     if transform is None:
         if train:
             transform = transforms.Compose([
@@ -52,7 +46,6 @@ def create_cifar10_dataset(data_dir='./data', train=True, transform=None):
 
 @register('dataset', 'cifar100')
 def create_cifar100_dataset(data_dir='./data', train=True, transform=None):
-    """Create CIFAR-100 dataset."""
     if transform is None:
         if train:
             transform = transforms.Compose([
@@ -72,7 +65,6 @@ def create_cifar100_dataset(data_dir='./data', train=True, transform=None):
 
 @register('dataset', 'arxiv')
 def create_arxiv_dataset(data_dir='./data'):
-    """Create OGB ArXiv dataset."""
     if PygNodePropPredDataset is None or T is None:
         raise ImportError("torch_geometric and ogb are required for ArXiv dataset")
     
@@ -85,18 +77,6 @@ def create_arxiv_dataset(data_dir='./data'):
 
 
 def create_dataset(dataset_name, data_dir='./data', train=True, transform=None, **kwargs):
-    """Create dataset by name.
-    
-    Args:
-        dataset_name: Name of the dataset
-        data_dir: Directory to store data
-        train: Whether to create training set
-        transform: Data transforms
-        **kwargs: Additional dataset-specific arguments
-        
-    Returns:
-        Dataset object
-    """
     from ..core.registry import build_component
     
     if dataset_name in ['mnist', 'cifar10', 'cifar100']:
@@ -109,20 +89,6 @@ def create_dataset(dataset_name, data_dir='./data', train=True, transform=None, 
 
 def create_dataloader(dataset, batch_size=32, shuffle=True, num_workers=4, 
                      pin_memory=True, drop_last=False, **kwargs):
-    """Create DataLoader for a dataset.
-    
-    Args:
-        dataset: Dataset object
-        batch_size: Batch size
-        shuffle: Whether to shuffle data
-        num_workers: Number of worker processes
-        pin_memory: Whether to pin memory
-        drop_last: Whether to drop last incomplete batch
-        **kwargs: Additional DataLoader arguments
-        
-    Returns:
-        DataLoader object
-    """
     return DataLoader(
         dataset=dataset,
         batch_size=batch_size,
@@ -135,17 +101,7 @@ def create_dataloader(dataset, batch_size=32, shuffle=True, num_workers=4,
 
 
 def create_train_val_test_split(dataset, val_split=0.1, test_split=0.1, seed=42):
-    """Create train/validation/test split from a dataset.
-    
-    Args:
-        dataset: Dataset to split
-        val_split: Fraction for validation set
-        test_split: Fraction for test set
-        seed: Random seed for reproducibility
-        
-    Returns:
-        Tuple of (train_dataset, val_dataset, test_dataset)
-    """
+
     total_size = len(dataset)
     val_size = int(total_size * val_split)
     test_size = int(total_size * test_split)
@@ -161,7 +117,6 @@ def create_train_val_test_split(dataset, val_split=0.1, test_split=0.1, seed=42)
 
 # Specialized data loading for different experiment types
 class LMCDataLoader:
-    """Data loader for Linear Mode Connectivity experiments."""
     
     def __init__(self, dataset_name, data_dir='./data', batch_size=32, val_split=0.1, seed=42):
         self.dataset_name = dataset_name
@@ -190,7 +145,6 @@ class LMCDataLoader:
 
 
 class GNNDataLoader:
-    """Data loader for Graph Neural Network experiments."""
     
     def __init__(self, data_dir='./data'):
         self.data_dir = data_dir
@@ -201,5 +155,4 @@ class GNNDataLoader:
         self.split_idx = self.dataset.get_idx_split()
     
     def get_data(self):
-        """Get data and split indices."""
         return self.data, self.split_idx

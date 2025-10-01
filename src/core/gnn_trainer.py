@@ -1,7 +1,3 @@
-"""
-GNN-specific trainer for single-graph datasets like arxiv.
-"""
-
 import torch
 import torch.nn.functional as F
 from .trainer import Trainer
@@ -27,7 +23,6 @@ class GNNTrainer(Trainer):
             self.split_idx[key] = self.split_idx[key].to(device)
     
     def train_epoch(self):
-        """Train for one epoch on the entire graph."""
         self.model.train()
         
         self.optimizer.zero_grad()
@@ -42,13 +37,11 @@ class GNNTrainer(Trainer):
         return {'train_loss': loss.item()}
     
     def validate(self):
-        """Validate on the entire graph."""
         self.model.eval()
         
         with torch.no_grad():
             out = self.model(self.data.x, self.data.adj_t)
             
-            # Calculate losses for each split
             train_loss = F.nll_loss(out[self.split_idx['train']], 
                                   self.data.y.squeeze(1)[self.split_idx['train']]).item()
             val_loss = F.nll_loss(out[self.split_idx['valid']], 
@@ -56,7 +49,6 @@ class GNNTrainer(Trainer):
             test_loss = F.nll_loss(out[self.split_idx['test']], 
                                  self.data.y.squeeze(1)[self.split_idx['test']]).item()
             
-            # Calculate accuracies
             y_pred = out.argmax(dim=-1, keepdim=True)
             
             train_acc = self.evaluator.eval({
@@ -84,11 +76,9 @@ class GNNTrainer(Trainer):
         }
     
     def evaluate(self, data_loader, prefix=''):
-        """Evaluate on the entire graph."""
         return self.validate()
     
     def train(self, num_epochs, val_every=1, save_every=None, save_path=None, early_stopping=None, 
               save_grad_every=None, save_params_every=None, model_idx=None):
-        """Train the model for specified number of epochs."""
         return super().train(num_epochs, val_every, save_every, save_path, early_stopping, 
                            save_grad_every, save_params_every, model_idx)

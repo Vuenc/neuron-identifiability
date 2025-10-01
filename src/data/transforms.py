@@ -1,7 +1,3 @@
-"""
-Data transformation utilities.
-"""
-
 import torch
 from torchvision import transforms as T
 from typing import Tuple, Optional
@@ -17,30 +13,15 @@ MNIST_DATASETS = ['MNIST', 'KMNIST', 'FashionMNIST', 'EMNIST']
 
 
 def get_transform(pad, crop, stats, flip):
-    """Get data transforms for image datasets.
-    
-    Args:
-        pad: Padding size
-        crop: Crop size
-        stats: Normalization statistics (mean, std)
-        flip: Whether to use random horizontal flip
-        
-    Returns:
-        Tuple of (train_transform, valid_transform, multiplier)
-    """
     tfm = [
         T.Pad(pad, padding_mode="reflect"),
         T.RandomCrop(crop),
     ]
-
     multiplier = 4
-
     if flip:
         tfm += [T.RandomHorizontalFlip(0.5)]
         multiplier *= 2
-
     base = [T.ToTensor(), T.Normalize(*stats)]
-
     return (
         T.Compose(base + tfm),
         T.Compose(base),
@@ -49,14 +30,6 @@ def get_transform(pad, crop, stats, flip):
 
 
 def get_stats(dataset_name):
-    """Get normalization statistics for a dataset.
-    
-    Args:
-        dataset_name: Name of the dataset
-        
-    Returns:
-        Tuple of (mean, std)
-    """
     if dataset_name in MNIST_DATASETS:
         return MNIST_STATS
     elif dataset_name in ['CIFAR10', 'CIFAR100']:
@@ -66,15 +39,7 @@ def get_stats(dataset_name):
 
 
 def get_transforms(dataset_name, train=True):
-    """Get transforms for a dataset.
     
-    Args:
-        dataset_name: Name of the dataset
-        train: Whether to get training transforms
-        
-    Returns:
-        Transform composition
-    """
     if dataset_name == 'MNIST':
         if train:
             return T.Compose([
@@ -120,11 +85,9 @@ def get_transforms(dataset_name, train=True):
 
 
 class DataAugmentation:
-    """Data augmentation utilities."""
     
     @staticmethod
     def cifar_augmentation():
-        """CIFAR-10/100 augmentation."""
         return T.Compose([
             T.RandomHorizontalFlip(),
             T.RandomCrop(32, 4),
@@ -134,7 +97,6 @@ class DataAugmentation:
     
     @staticmethod
     def mnist_augmentation():
-        """MNIST augmentation."""
         return T.Compose([
             T.ToTensor(),
             T.Normalize((0.1307,), (0.3081,))
@@ -142,7 +104,6 @@ class DataAugmentation:
     
     @staticmethod
     def imagenet_augmentation():
-        """ImageNet-style augmentation."""
         return T.Compose([
             T.RandomResizedCrop(224),
             T.RandomHorizontalFlip(),

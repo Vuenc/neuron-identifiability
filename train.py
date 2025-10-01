@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 Main training script using Hydra configuration management.
-Supports both single and multi-model training.
 """
 
 import hydra
@@ -511,7 +510,6 @@ def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, e
             except ImportError:
                 print("Warning: wandb not available")
     
-    # Save results if this is the final analysis
     if epoch is None:
         save_interpolation_results(interpolation_results, output_dir)
     
@@ -519,15 +517,12 @@ def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, e
 
 
 def interpolation_interval_analysis(cfg: DictConfig, output_dir: Path, data_info: dict):
-    """Perform interval-based interpolation analysis similar to cosine similarity."""
+    
     print("\nComputing interval-based interpolation analysis...")
-    
     save_every = cfg.interpolation.get('save_every', None)
-    
     if save_every is None:
         print("Warning: Interpolation save_every not configured")
         return
-    
     print(f"Analyzing every {save_every} epochs")
     
     all_epoch_results = []
@@ -544,7 +539,6 @@ def interpolation_interval_analysis(cfg: DictConfig, output_dir: Path, data_info
                 }
                 all_epoch_results.append(epoch_results)
                 
-                # Log summary metrics
                 if 'test_accuracy' in results:
                     if isinstance(results['test_accuracy'], list):
                         # Grid interpolation - show best and worst
