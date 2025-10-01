@@ -276,7 +276,7 @@ class AsymWGNN(MyGNN):
 
 # Convenience function for creating GNNs
 def create_gnn(model_type, in_channels, hidden_channels, out_channels, num_layers,
-               dropout, C_lst=None):
+               dropout):
     """Create GNN based on model type.
     
     Args:
@@ -286,8 +286,13 @@ def create_gnn(model_type, in_channels, hidden_channels, out_channels, num_layer
         out_channels: Output feature dimension
         num_layers: Number of layers
         dropout: Dropout rate
-        C_lst: List of C matrices for asymmetric activations
     """
+    # TODO: take care of this, what is this configuring?
+    C_lst = None
+    if model_type in ['asym_gelu_gnn', 'asym_swiglu_gnn', 'asym_w_gnn']:
+        import math
+        C_lst = [0.01 * torch.randn(hidden_channels, hidden_channels) / 
+                math.sqrt(hidden_channels) for _ in range(num_layers)]
     if model_type == 'gnn':
         lin_builder = nn.Linear
         return MyGNN(in_channels, hidden_channels, out_channels, num_layers, 

@@ -19,9 +19,7 @@ class Trainer:
     
     def __init__(self, 
                  model: nn.Module,
-                 train_loader: DataLoader,
-                 val_loader: DataLoader,
-                 test_loader: DataLoader,
+                 data: Dict[str, Any],
                  optimizer: optim.Optimizer,
                  scheduler: Optional[Any] = None,
                  device: str = 'cuda',
@@ -35,9 +33,8 @@ class Trainer:
         
         Args:
             model: The model to train
-            train_loader: Training data loader
-            val_loader: Validation data loader
-            test_loader: Test data loader
+            data: Dictionary containing data loaders (train_loader, val_loader, test_loader)
+                  or GNN data (data, split_idx)
             optimizer: Optimizer
             scheduler: Learning rate scheduler (optional)
             device: Device to train on
@@ -49,9 +46,9 @@ class Trainer:
             shared_wandb: Whether this trainer shares a wandb run with others
         """
         self.model = model
-        self.train_loader = train_loader
-        self.val_loader = val_loader
-        self.test_loader = test_loader
+        self.train_loader = data.get('train_loader')
+        self.val_loader = data.get('val_loader')
+        self.test_loader = data.get('test_loader')
         self.optimizer = optimizer
         self.scheduler = scheduler
         self.device = torch.device(device)
@@ -184,6 +181,10 @@ class Trainer:
     
     def train_epoch(self) -> Dict[str, float]:
         """Train for one epoch."""
+        if self.train_loader is None:
+            # This is a GNN trainer, should be overridden
+            raise NotImplementedError("train_epoch must be overridden for GNN trainers")
+        
         self.model.train()
         total_loss = 0.0
         num_batches = 0
@@ -213,6 +214,10 @@ class Trainer:
     
     def evaluate(self, data_loader: DataLoader, prefix: str = '') -> Dict[str, float]:
         """Evaluate the model on a data loader."""
+        if data_loader is None:
+            # This is a GNN trainer, should be overridden
+            raise NotImplementedError("evaluate must be overridden for GNN trainers")
+        
         self.model.eval()
         total_loss = 0.0
         correct = 0
@@ -258,7 +263,8 @@ class Trainer:
               save_path: Optional[str] = None,
               early_stopping: Optional[Dict[str, Any]] = None,
               save_grad_every: Optional[int] = None,
-              save_params_every: Optional[int] = None) -> Dict[str, Any]:
+              save_params_every: Optional[int] = None,
+              model_idx: Optional[int] = None) -> Dict[str, Any]:
         """Train the model for the specified number of epochs.
         
         Args:
@@ -293,7 +299,7 @@ class Trainer:
                               if v.requires_grad],
                 'optimizer_state_dict': self.optimizer.state_dict(),
                 'val_accuracy': 0.0  # No validation at initialization
-            }, f"{save_path}/checkpoint_epoch_0_{self.model_prefix}.pt")
+            }, f"{save_path}/checkpoint_epoch_0_{self.model_prefix if model_idx is None else f'model_{model_idx + 1}'}.pt")
         
         for epoch in range(num_epochs):
             # Training
@@ -354,9 +360,9 @@ class Trainer:
                                   if v.requires_grad],
                     'optimizer_state_dict': self.optimizer.state_dict(),
                     'val_accuracy': val_metrics.get('val_accuracy', 0.0)
-                }, f"{save_path}/checkpoint_epoch_{epoch+1}_{self.model_prefix}.pt")
+                }, f"{save_path}/checkpoint_epoch_{epoch+1}_{self.model_prefix if model_idx is None else f'model_{model_idx + 1}'}.pt")
             
-            global_step += len(self.train_loader)
+            global_step += len(self.train_loader) if self.train_loader is not None else 1
         
         # Final evaluation on test set
         test_metrics = self.evaluate(self.test_loader, 'test_')

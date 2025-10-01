@@ -76,29 +76,15 @@ def create_model(cfg: DictConfig, fixed_masks=None, device=None):
             fixed_masks=fixed_masks
         )
     elif cfg.model.name == 'gnn_arxiv':
-        dataset = create_dataset(cfg.dataset.name, cfg.dataset.data_dir)
-        data = dataset[0]
-        if device:
-            data = data.to(device)
-        
-        C_lst = None
-        if cfg.model.model_type in ['asym_gelu_gnn', 'asym_swiglu_gnn', 'asym_w_gnn']:
-            import math
-            C_lst = [0.01 * torch.randn(cfg.model.hidden_channels, cfg.model.hidden_channels) / 
-                    math.sqrt(cfg.model.hidden_channels) for _ in range(cfg.model.num_layers)]
-        
-        model = create_gnn(
+        # TODO: why don't we have fixed_masks here?
+        return create_gnn(
             model_type=cfg.model.model_type,
-            in_channels=data.num_features,
+            in_channels=cfg.model.in_channels,
             hidden_channels=cfg.model.hidden_channels,
-            out_channels=dataset.num_classes,
+            out_channels=cfg.model.out_channels,
             num_layers=cfg.model.num_layers,
             dropout=cfg.model.dropout,
-            C_lst=C_lst
         )
-        if device:
-            model = model.to(device)
-        return model
     else:
         raise ValueError(f"Unknown model: {cfg.model.name}")
 
@@ -107,11 +93,9 @@ def setup_data(cfg: DictConfig):
     if cfg.dataset.name in ['mnist', 'cifar10', 'cifar100']:
         train_dataset = create_dataset(cfg.dataset.name, cfg.dataset.data_dir, train=True)
         test_dataset = create_dataset(cfg.dataset.name, cfg.dataset.data_dir, train=False)
-        
         train_dataset, val_dataset = create_train_val_test_split(
             train_dataset, val_split=cfg.dataset.val_split, test_split=0.0, seed=cfg.seed
         )[0:2]
-        
         train_loader = create_dataloader(
             train_dataset, 
             batch_size=cfg.dataset.batch_size, 
@@ -133,7 +117,6 @@ def setup_data(cfg: DictConfig):
             num_workers=cfg.dataset.num_workers,
             pin_memory=cfg.dataset.pin_memory
         )
-        
         return {
             'train_loader': train_loader,
             'val_loader': val_loader,
@@ -142,13 +125,11 @@ def setup_data(cfg: DictConfig):
             'val_dataset': val_dataset,
             'test_dataset': test_dataset
         }
-    
     elif cfg.dataset.name == 'arxiv':
         dataset = create_dataset(cfg.dataset.name, cfg.dataset.data_dir)
         data = dataset[0]
         data = data.to(cfg.device)
         split_idx = dataset.get_idx_split()
-        
         return {
             'dataset': dataset,
             'data': data,
@@ -157,134 +138,8 @@ def setup_data(cfg: DictConfig):
             'val_loader': None,
             'test_loader': None
         }
-    
     else:
         raise ValueError(f"Unknown dataset: {cfg.dataset.name}")
-
-
-def train_single(cfg: DictConfig, output_dir: Path, model_idx: int = None) -> dict:
-    data_info = setup_data(cfg)
-    model = create_model(cfg, device=cfg.device)
-    
-    optimizer = create_optimizer(cfg.optimizer.name, model, **cfg.optimizer)
-    scheduler = create_scheduler(cfg.scheduler.name, optimizer, **cfg.scheduler) if cfg.scheduler.name != 'none' else None
-    
-    if cfg.model.name == 'gnn_arxiv':
-        try:
-            from ogb.nodeproppred import Evaluator
-        except ImportError:
-            raise ImportError("ogb required")
-        
-        data = data_info['data']
-        split_idx = data_info['split_idx']
-        evaluator = Evaluator(name='ogbn-arxiv')
-        
-        def train_gnn_epoch():
-            model.train()
-            optimizer.zero_grad()
-            out = model(data.x, data.adj_t)[split_idx['train']]
-            loss = torch.nn.functional.nll_loss(out, data.y.squeeze(1)[split_idx['train']])
-            loss.backward()
-            optimizer.step()
-            if scheduler:
-                scheduler.step()
-            return loss.item()
-        
-        def test_gnn():
-            model.eval()
-            with torch.no_grad():
-                out = model(data.x, data.adj_t)
-                train_acc = evaluator.eval({
-                    'y_true': data.y[split_idx['train']],
-                    'y_pred': out[split_idx['train']].argmax(dim=-1, keepdim=True),
-                })['acc']
-                val_acc = evaluator.eval({
-                    'y_true': data.y[split_idx['valid']],
-                    'y_pred': out[split_idx['valid']].argmax(dim=-1, keepdim=True),
-                })['acc']
-                test_acc = evaluator.eval({
-                    'y_true': data.y[split_idx['test']],
-                    'y_pred': out[split_idx['test']].argmax(dim=-1, keepdim=True),
-                })['acc']
-            return train_acc, val_acc, test_acc
-        
-        model_num = (model_idx + 1) if model_idx is not None else 1
-        torch.save({
-            'epoch': 0,
-            'step': 0,
-            'model_state_dict': model.state_dict(),
-            'val_accuracy': 0.0
-        }, output_dir / f"checkpoint_epoch_0_model_{model_num}.pt")
-        print(f"Saved init checkpoint to {output_dir}/checkpoint_epoch_0_model_{model_num}.pt")
-        
-        best_val_acc = 0
-        step = 0
-        for epoch in range(cfg.training.num_epochs):
-            loss = train_gnn_epoch()
-            train_acc, val_acc, test_acc = test_gnn()
-            step += 1
-            
-            if epoch % cfg.training.log_steps == 0:
-                print(f'Epoch {epoch+1:03d}: Loss: {loss:.4f}, '
-                      f'Train: {100*train_acc:.2f}%, Val: {100*val_acc:.2f}%, '
-                      f'Test: {100*test_acc:.2f}%')
-            
-            if cfg.training.save_every is not None and (epoch + 1) % cfg.training.save_every == 0:
-                torch.save({
-                    'epoch': epoch + 1,
-                    'step': step,
-                    'model_state_dict': model.state_dict(),
-                    'val_accuracy': val_acc
-                }, output_dir / f"checkpoint_epoch_{epoch+1}_model_{model_num}.pt")
-                print(f"Saved checkpoint to {output_dir}/checkpoint_epoch_{epoch+1}_model_{model_num}.pt")
-            
-            if val_acc > best_val_acc:
-                best_val_acc = val_acc
-                torch.save({
-                    'epoch': epoch + 1,
-                    'step': step,
-                    'model_state_dict': model.state_dict(),
-                    'val_accuracy': val_acc
-                }, output_dir / "checkpoint_best.pt")
-        
-        print(f'Best val acc: {100*best_val_acc:.2f}%')
-        
-        results = {
-            'final_test_metrics': {
-                'test_accuracy': test_acc,
-                'test_loss': 0.0
-            }
-        }
-        
-        return results, None
-    
-    else:
-        trainer = Trainer(
-            model=model,
-            train_loader=data_info['train_loader'],
-            val_loader=data_info['val_loader'],
-            test_loader=data_info['test_loader'],
-            optimizer=optimizer,
-            scheduler=scheduler,
-            device=cfg.device,
-            logging={
-                **cfg.logging,
-                'name': f"{cfg.experiment_name}_model_{model_idx + 1}" if model_idx is not None else cfg.experiment_name
-            },
-            print_summary=(model_idx == 0) if model_idx is not None else True
-        )
-        
-        results = trainer.train(
-            num_epochs=cfg.training.num_epochs,
-            val_every=cfg.training.val_every,
-            save_every=cfg.training.save_every,
-            save_path=str(output_dir) if cfg.training.save_path is None else cfg.training.save_path,
-            early_stopping=cfg.training.early_stopping,
-            save_grad_every=cfg.training.save_grad_every,
-            save_params_every=cfg.training.save_params_every
-        )
-        
-        return results, trainer
 
 
 def setup_wandb(cfg: DictConfig):
@@ -368,57 +223,32 @@ def train_multi(cfg: DictConfig, output_dir: Path, init_seeds: list, mask_seeds:
         optimizer = create_optimizer(cfg.optimizer.name, model, **cfg.optimizer)
         scheduler = create_scheduler(cfg.scheduler.name, optimizer, **cfg.scheduler) if cfg.scheduler.name != 'none' else None
         
-        if cfg.model.name == 'gnn_arxiv':
-            trainer = GNNTrainer(
-                model=model,
-                optimizer=optimizer,
-                scheduler=scheduler,
-                device=cfg.device,
-                data=data_info['data'],
-                split_idx=data_info['split_idx'],
-                logger=None,
-                save_every=cfg.training.save_every,
-                output_dir=output_dir
-            )
-        else:
-            trainer = Trainer(
-                model=model,
-                train_loader=data_info['train_loader'],
-                val_loader=data_info['val_loader'],
-                test_loader=data_info['test_loader'],
-                optimizer=optimizer,
-                scheduler=scheduler,
-                device=cfg.device,
-                logging=cfg.logging,
-                print_summary=(model_idx == 0),
-                model_prefix=f'model_{model_idx + 1}',
-                shared_wandb=True
-            )
+        trainer_class = GNNTrainer if cfg.model.name == 'gnn_arxiv' else Trainer
+        trainer = trainer_class(
+            model=model,
+            data=data_info,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            device=cfg.device,
+            model_prefix=f'model_{model_idx + 1}',
+            shared_wandb=True,
+            logging=cfg.logging,
+            print_summary=(model_idx == 0)
+        )
         
         save_grad_every = getattr(cfg, 'save_grad_every', cfg.training.save_grad_every)
         save_params_every = getattr(cfg, 'save_params_every', cfg.training.save_params_every)
         
-        if cfg.model.name == 'gnn_arxiv':
-            results = trainer.train(
-                num_epochs=cfg.training.num_epochs,
-                val_every=cfg.training.val_every,
-                save_every=cfg.training.save_every,
-                save_path=str(output_dir) if cfg.training.save_path is None else cfg.training.save_path,
-                early_stopping=None,
-                save_grad_every=save_grad_every,
-                save_params_every=save_params_every,
-                model_idx=model_idx
-            )
-        else:
-            results = trainer.train(
-                num_epochs=cfg.training.num_epochs,
-                val_every=cfg.training.val_every,
-                save_every=cfg.training.save_every,
-                save_path=str(output_dir) if cfg.training.save_path is None else cfg.training.save_path,
-                early_stopping=None,
-                save_grad_every=save_grad_every,
-                save_params_every=save_params_every
-            )
+        results = trainer.train(
+            num_epochs=cfg.training.num_epochs,
+            val_every=cfg.training.val_every,
+            save_every=cfg.training.save_every,
+            save_path=str(output_dir) if cfg.training.save_path is None else cfg.training.save_path,
+            early_stopping=None,
+            save_grad_every=save_grad_every,
+            save_params_every=save_params_every,
+            model_idx=model_idx
+        )
         
         model_results.append(results)
     
@@ -426,11 +256,9 @@ def train_multi(cfg: DictConfig, output_dir: Path, init_seeds: list, mask_seeds:
         cossim_analysis(cfg, output_dir)
     
     if cfg.interpolation.enabled and num_models >= 2:
-        # Check if interval-based analysis is enabled
         if cfg.interpolation.get('save_every') is not None:
             interpolation_interval_analysis(cfg, output_dir, data_info)
         else:
-            # Only run final interpolation analysis
             interpolation_analysis(cfg, output_dir, data_info)
     
     if wandb:
@@ -532,12 +360,6 @@ def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, e
     num_models = cfg.get('num_models', 1)
     interpolation_type = cfg.interpolation.type
     
-    if interpolation_type == 'auto':
-        if num_models == 2:
-            interpolation_type = 'grid'
-        else:
-            interpolation_type = 'midpoint'
-    
     if interpolation_type == 'grid' and num_models != 2:
         print(f"Warning: Grid needs 2 models, got {num_models}. Using midpoint.")
         interpolation_type = 'midpoint'
@@ -548,7 +370,6 @@ def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, e
     def create_model_for_interpolation():
         return create_model(cfg, device=cfg.device)
     
-    # Determine which epoch to load
     target_epoch = epoch if epoch is not None else cfg.training.num_epochs
     
     if interpolation_type == 'grid':
@@ -572,14 +393,14 @@ def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, e
                 model1, model2, data_info['data'], data_info['split_idx'],
                 steps=cfg.interpolation.steps,
                 device=cfg.device,
-                use_wandb=False  # We'll handle wandb logging ourselves
+                use_wandb=False
             )
         else:
             interpolation_results = interpolate_models(
                 model1, model2, data_info['train_loader'], data_info['val_loader'], data_info['test_loader'],
                 steps=cfg.interpolation.steps,
                 device=cfg.device,
-                use_wandb=False  # We'll handle wandb logging ourselves
+                use_wandb=False
             )
         
         if epoch is not None:
@@ -587,12 +408,10 @@ def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, e
         else:
             print(f"Grid interpolation completed!")
         
-        # Log to wandb with epoch-specific naming
         if cfg.logging.get('use_wandb', False):
             try:
                 import wandb
                 if wandb.run is not None:
-                    # Log summary metrics
                     log_data = {
                         'interpolation_type': 'grid',
                         'interpolation_best_test_accuracy': max(interpolation_results['test_accuracy']),
@@ -600,7 +419,6 @@ def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, e
                         'interpolation_barrier_height': interpolation_results['barrier_height'],
                     }
                     
-                    # Log detailed lambda values
                     for i, (lam, train_acc, val_acc, test_acc, train_loss, val_loss, test_loss) in enumerate(zip(
                         interpolation_results['lambdas'],
                         interpolation_results['train_accuracy'],
@@ -621,7 +439,6 @@ def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, e
                         }
                         
                         if epoch is not None:
-                            # Add epoch-specific naming
                             epoch_step_data = {}
                             for key, value in step_data.items():
                                 epoch_step_data[f'epoch_{epoch}_{key}'] = value
@@ -629,9 +446,7 @@ def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, e
                         else:
                             wandb.log(step_data)
                     
-                    # Log summary metrics
                     if epoch is not None:
-                        # Add epoch-specific naming
                         epoch_log_data = {}
                         for key, value in log_data.items():
                             epoch_log_data[f'epoch_{epoch}_{key}'] = value
@@ -657,7 +472,7 @@ def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, e
         
         interpolation_results = evaluate_midpoint_models(
             models, data_info['train_loader'], data_info['val_loader'], data_info['test_loader'], cfg.device,
-            use_wandb=False  # We'll handle wandb logging ourselves
+            use_wandb=False
         )
         
         if epoch is not None:
@@ -671,7 +486,6 @@ def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, e
         print(f"  Val loss: {interpolation_results['val_loss']:.4f}")
         print(f"  Test loss: {interpolation_results['test_loss']:.4f}")
         
-        # Log to wandb with epoch-specific naming
         if cfg.logging.get('use_wandb', False):
             try:
                 import wandb
@@ -688,7 +502,6 @@ def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, e
                     }
                     
                     if epoch is not None:
-                        # Add epoch-specific naming
                         epoch_log_data = {}
                         for key, value in log_data.items():
                             epoch_log_data[f'epoch_{epoch}_{key}'] = value
@@ -749,7 +562,6 @@ def interpolation_interval_analysis(cfg: DictConfig, output_dir: Path, data_info
                 print(f"Warning: Interpolation analysis failed for epoch {epoch}")
     
     if len(all_epoch_results) > 0:
-        # Save all epoch results
         torch.save({
             'all_epoch_results': all_epoch_results,
             'num_epochs': len(all_epoch_results),
@@ -770,19 +582,19 @@ def main(cfg: DictConfig) -> None:
     
     if init_seeds_raw == 'infer_from_mask' and cfg.use_fixed_masks:
         init_seeds = [int(mask_seeds_raw)+i+1 for i in range(cfg.num_models)]
-    elif isinstance(init_seeds_raw, (list, tuple)) or hasattr(init_seeds_raw, '__iter__'):
+    elif isinstance(init_seeds_raw, (list, tuple)):
         init_seeds = [int(x) for x in init_seeds_raw]
     else:
         init_seeds = [int(init_seeds_raw)]
     
-    if isinstance(mask_seeds_raw, (list, tuple)) or hasattr(mask_seeds_raw, '__iter__'):
+    if isinstance(mask_seeds_raw, (list, tuple)):
         mask_seeds = [int(x) for x in mask_seeds_raw]
     else:
         mask_seeds = [int(mask_seeds_raw)]
     
     print(f"Global seed: {cfg.seed}")
-    print(f"Init seeds: {init_seeds}")
-    print(f"Mask seeds: {mask_seeds}")
+    print(f"Init seed(s): {init_seeds}")
+    print(f"Mask seed(s): {mask_seeds}")
     
     output_dir = Path(cfg.output_dir) / cfg.experiment_name
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -794,18 +606,18 @@ def main(cfg: DictConfig) -> None:
     print(f"Output: {output_dir}")
     
     num_models = cfg.get('num_models', 1)
+    cfg.num_models = num_models
     
-    if num_models > 1:
-        train_multi(cfg, output_dir, init_seeds, mask_seeds)
-    else:
+    if num_models == 1:
         print("Single model training")
         set_init_seed(init_seeds[0])
-        results, trainer = train_single(cfg, output_dir)
-        
         if cfg.interpolation.enabled:
             print("Warning: LMC needs 2+ models. Skipping LMC.")
-        
-        print(f"Completed. Results saved to {output_dir}")
+    else:
+        print(f"Multi-model training: {num_models} models")
+    
+    train_multi(cfg, output_dir, init_seeds, mask_seeds)
+    print(f"Completed. Results saved to {output_dir}")
 
 
 if __name__ == "__main__":
