@@ -1,13 +1,20 @@
 # @package training
 num_epochs: 500
 val_every: 1
-save_every: null
+save_every: 10
 save_path: null
-early_stopping:
-  patience: 50
-  min_delta: 0.001
+early_stopping: null
 
 # GNN-specific settings
 runs: 1
 log_steps: 1
 warmup_steps: 25
+
+# Gradient and parameter saving
+save_grad_every: null
+save_params_every: null
+
+# Cosine similarity analysis
+cosine_similarity:
+  enabled: false
+  save_every: null

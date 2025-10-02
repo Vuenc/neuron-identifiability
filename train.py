@@ -392,7 +392,8 @@ def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, e
                 model1, model2, data_info['data'], data_info['split_idx'],
                 steps=cfg.interpolation.steps,
                 device=cfg.device,
-                use_wandb=False
+                use_wandb=False,
+                rewarm=True,
             )
         else:
             interpolation_results = interpolate_models(

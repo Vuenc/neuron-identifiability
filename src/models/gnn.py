@@ -152,10 +152,13 @@ class AsymNonlin(nn.Module):
     def __init__(self, C):
         super().__init__()
         self.register_buffer("C", C)
+        self.nonlin = nn.GELU()
     
     def forward(self, x):
-        gate = F.sigmoid(F.linear(x, self.C))
-        return gate * x
+        x = self.nonlin(x)
+        x = torch.matmul(x, self.C)
+        x = self.nonlin(x)
+        return x
 
 
 class AsymSwiGLU(nn.Module):

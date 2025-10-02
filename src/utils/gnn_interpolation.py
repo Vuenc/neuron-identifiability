@@ -3,8 +3,21 @@ GNN-specific interpolation utilities.
 """
 
 import torch
+import torch.nn as nn
 import copy
 from .interpolation import dist_sd, get_num_params, lerp_sd, compute_barrier, compute_linearity
+
+
+def reset_bn_stats(model, data):
+    """Reset batch normalization statistics - from github.com/KellerJordan/REPAIR"""
+    for m in model.modules():
+        if type(m) == nn.BatchNorm1d:
+            m.momentum = None  # use simple average
+            m.reset_running_stats()
+    model.train()
+    with torch.no_grad():
+        for _ in range(50):
+            _ = model(data.x, data.adj_t)
 
 
 def evaluate_gnn_model(model, data, split_idx, device='cuda'):
@@ -58,7 +71,7 @@ def evaluate_gnn_model(model, data, split_idx, device='cuda'):
     return results
 
 
-def interpolate_gnn_models(model1, model2, data, split_idx, steps=25, device='cuda', use_wandb=False):
+def interpolate_gnn_models(model1, model2, data, split_idx, steps=25, device='cuda', use_wandb=False, rewarm=True):
     """Perform comprehensive interpolation between two GNN models.
     
     Args:
@@ -104,6 +117,10 @@ def interpolate_gnn_models(model1, model2, data, split_idx, steps=25, device='cu
         # Interpolate parameters
         interpolated_state = lerp_sd(lam, state1, state2)
         model1.load_state_dict(interpolated_state)
+        
+        # Reset batch norm stats if requested (matching old implementation)
+        if rewarm:
+            reset_bn_stats(model1, data)
         
         # Evaluate interpolated model
         metrics = evaluate_gnn_model(model1, data, split_idx, device)
