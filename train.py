@@ -576,12 +576,12 @@ def main(cfg: DictConfig) -> None:
     
     if init_seeds_raw == 'infer_from_mask' and cfg.use_fixed_masks:
         init_seeds = [int(mask_seeds_raw)+i+1 for i in range(cfg.num_models)]
-    elif isinstance(init_seeds_raw, (list, tuple)):
+    elif hasattr(init_seeds_raw, '__iter__'):
         init_seeds = [int(x) for x in init_seeds_raw]
     else:
         init_seeds = [int(init_seeds_raw)]
     
-    if isinstance(mask_seeds_raw, (list, tuple)):
+    if hasattr(mask_seeds_raw, '__iter__'):
         mask_seeds = [int(x) for x in mask_seeds_raw]
     else:
         mask_seeds = [int(mask_seeds_raw)]

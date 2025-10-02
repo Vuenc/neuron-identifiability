@@ -137,7 +137,14 @@ def make_mask(in_dim, out_dim, mask_num = 0, num_fixed = 6, mask_type='densest')
             raise ValueError('Error in making mask, possibly because out_dim is too large for these settings')
     else:
         raise ValueError('Invalid mask type')
-
+    
+    
+def make_C_lst(hidden_channels, num_layers):
+    import math
+    g = torch.Generator()
+    g.manual_seed(0)
+    return [0.01 * torch.randn(hidden_channels, hidden_channels, generator=g) / 
+            math.sqrt(hidden_channels) for _ in range(num_layers)]
 
 class AsymNonlin(nn.Module):
     """Asymmetric nonlinearity."""
@@ -290,9 +297,7 @@ def create_gnn(model_type, in_channels, hidden_channels, out_channels, num_layer
     # TODO: take care of this, what is this configuring?
     C_lst = None
     if model_type in ['asym_gelu_gnn', 'asym_swiglu_gnn', 'asym_w_gnn']:
-        import math
-        C_lst = [0.01 * torch.randn(hidden_channels, hidden_channels) / 
-                math.sqrt(hidden_channels) for _ in range(num_layers)]
+        C_lst = make_C_lst(hidden_channels, num_layers)
     if model_type == 'gnn':
         lin_builder = nn.Linear
         return MyGNN(in_channels, hidden_channels, out_channels, num_layers, 

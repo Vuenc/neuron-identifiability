@@ -115,7 +115,6 @@ def create_train_val_test_split(dataset, val_split=0.1, test_split=0.1, seed=42)
     return train_dataset, val_dataset, test_dataset
 
 
-# Specialized data loading for different experiment types
 class LMCDataLoader:
     
     def __init__(self, dataset_name, data_dir='./data', batch_size=32, val_split=0.1, seed=42):
@@ -125,22 +124,18 @@ class LMCDataLoader:
         self.val_split = val_split
         self.seed = seed
         
-        # Create datasets
         self.train_dataset = create_dataset(dataset_name, data_dir, train=True)
         self.test_dataset = create_dataset(dataset_name, data_dir, train=False)
         
-        # Create train/val split
         self.train_dataset, self.val_dataset = create_train_val_test_split(
             self.train_dataset, val_split=val_split, test_split=0.0, seed=seed
         )[0:2]
         
-        # Create data loaders
         self.train_loader = create_dataloader(self.train_dataset, batch_size, shuffle=True)
         self.val_loader = create_dataloader(self.val_dataset, batch_size, shuffle=False)
         self.test_loader = create_dataloader(self.test_dataset, batch_size, shuffle=False)
     
     def get_loaders(self):
-        """Get all data loaders."""
         return self.train_loader, self.val_loader, self.test_loader
 
 
@@ -149,7 +144,6 @@ class GNNDataLoader:
     def __init__(self, data_dir='./data'):
         self.data_dir = data_dir
         
-        # Create dataset
         self.dataset = create_dataset('arxiv', data_dir)
         self.data = self.dataset[0]
         self.split_idx = self.dataset.get_idx_split()
