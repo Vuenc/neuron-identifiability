@@ -174,14 +174,6 @@ def train_multi(cfg: DictConfig, output_dir: Path, init_seeds: list):
     for model_idx in range(num_models):
         print(f"\n=== Model {model_idx + 1}/{num_models} ===")
         
-        # fixed_masks = None
-        # if use_fixed_masks:
-        #     try:
-        #         fixed_masks = load_masks(output_dir)
-        #         print(f"Loaded masks for model {model_idx + 1}")
-        #     except FileNotFoundError:
-        #         print("Warning: Masks not found")
-        
         model_init_seed = init_seeds[model_idx % len(init_seeds)]
         set_seed(model_init_seed)
         
