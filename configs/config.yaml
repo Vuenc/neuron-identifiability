@@ -15,8 +15,7 @@ use_fixed_masks: false
 
 # Global settings
 seed: 42
-init_seed: 42  # Controls parameter initialization
-mask_seed: 42  # Controls mask generation
+init_seed: null  # Controls parameter initialization
 device: cuda
 output_dir: ./outputs
 experiment_name: ${now:%Y-%m-%d}/${now:%H-%M-%S}_${model.name}

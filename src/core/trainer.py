@@ -39,11 +39,11 @@ class Trainer:
         
         if self.print_summary:
             self._print_model_summary()
-            self._print_mask_checksum()
-            self._print_param_checksum()
+            self._print_mask_hash()
+            self._print_param_hash()
         else:
-            self._print_mask_checksum()
-            self._print_param_checksum()
+            self._print_mask_hash()
+            self._print_param_hash()
         
         if self.logging.get('use_wandb', False) and not self.shared_wandb:
             wandb_config = {
@@ -105,7 +105,7 @@ class Trainer:
         print("="*60)
         print()
     
-    def _compute_mask_checksum(self) -> str:
+    def _compute_mask_hash(self) -> str:
         import hashlib
         mask_data = []
         for name, module in self.model.named_modules():
@@ -120,7 +120,7 @@ class Trainer:
         combined = "|".join(sorted(mask_data))
         return hashlib.md5(combined.encode()).hexdigest()[:8]
     
-    def _compute_param_checksum(self) -> str:
+    def _compute_param_hash(self) -> str:
         import hashlib
         
         param_data = []
@@ -130,13 +130,13 @@ class Trainer:
         combined = "|".join(sorted(param_data))
         return hashlib.md5(combined.encode()).hexdigest()[:8]
     
-    def _print_mask_checksum(self):
-        checksum = self._compute_mask_checksum()
-        print(f"Mask checksum: {checksum}")
+    def _print_mask_hash(self):
+        hash = self._compute_mask_hash()
+        print(f"Mask hash: {hash}")
     
-    def _print_param_checksum(self):
-        checksum = self._compute_param_checksum()
-        print(f"Parameter checksum: {checksum}")
+    def _print_param_hash(self):
+        hash = self._compute_param_hash()
+        print(f"Parameter hash: {hash}")
     
     def train_epoch(self) -> Dict[str, float]:
         
