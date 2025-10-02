@@ -31,13 +31,10 @@ class AsymSwiGLU(nn.Module):
 
 class SparseLinear(nn.Module):
     def __init__(self, in_dim, out_dim, mask_constant=0, mask_type='random_subsets', 
-                 do_normal_mask=True, num_fixed=6, mask_num=0, fixed_mask=None):
+                 do_normal_mask=True, num_fixed=6, mask_num=0):
         super().__init__()
-        
-        if fixed_mask is not None:
-            mask = fixed_mask
-        else:
-            mask = self._make_mask(in_dim, out_dim, mask_type, num_fixed, mask_num)
+
+        mask = self._make_mask(in_dim, out_dim, mask_type, num_fixed, mask_num)
         self.register_buffer('mask', mask, persistent=True)
         
         self.weight = nn.Parameter(torch.empty(out_dim, in_dim))
@@ -112,7 +109,7 @@ class SparseLinear(nn.Module):
 @register('model', 'mlp_standard')
 class MLP(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, num_layers, norm='layer', 
-                 mask_params=None, fixed_masks=None, elementwise_affine=True, activation='relu'):
+                 mask_params=None, elementwise_affine=True, activation='relu'):
         super().__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
@@ -169,7 +166,7 @@ class MLP(nn.Module):
 @register('model', 'mlp_w_asym')
 class WMLP(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, num_layers, 
-                 mask_params=None, norm='layer', fixed_masks=None, elementwise_affine=True, activation='gelu'):
+                 mask_params=None, norm='layer', elementwise_affine=True, activation='gelu'):
         super().__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
@@ -206,25 +203,21 @@ class WMLP(nn.Module):
             return default_params
         
         if num_layers == 1:
-            fixed_mask = fixed_masks.get('lins.0') if fixed_masks else None
             self.lins.append(SparseLinear(input_dim, output_dim, 
-                                        mask_num=0, fixed_mask=fixed_mask, **get_mask_params(0)))
+                                        mask_num=0, **get_mask_params(0)))
         else:
             first_layer_params = get_mask_params(0, mask_params.get('default', None))
-            fixed_mask = fixed_masks.get('lins.0') if fixed_masks else None
             self.lins.append(SparseLinear(input_dim, hidden_dim, 
-                                        mask_num=0, fixed_mask=fixed_mask, **first_layer_params))
+                                        mask_num=0, **first_layer_params))
             
             for i in range(num_layers - 2):
                 hidden_layer_params = get_mask_params(i+1, mask_params.get('default', None))
-                fixed_mask = fixed_masks.get(f'lins.{i+1}') if fixed_masks else None
                 self.lins.append(SparseLinear(hidden_dim, hidden_dim, 
-                                            mask_num=i+1, fixed_mask=fixed_mask, **hidden_layer_params))
+                                            mask_num=i+1, **hidden_layer_params))
             
             output_layer_params = get_mask_params(num_layers-1)
-            fixed_mask = fixed_masks.get(f'lins.{num_layers-1}') if fixed_masks else None
             self.lins.append(SparseLinear(hidden_dim, output_dim, 
-                                        mask_num=num_layers-1, fixed_mask=fixed_mask, **output_layer_params))
+                                        mask_num=num_layers-1, **output_layer_params))
             
             # Add normalization layers
             if self.norm_kind in ('layer', 'batch'):
@@ -262,7 +255,7 @@ class WMLP(nn.Module):
 @register('model', 'mlp_sigma_asym')
 class SigmaMLP(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, num_layers, 
-                 norm='layer', asym_act=True, fixed_masks=None):
+                 norm='layer', asym_act=True):
         super().__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
@@ -275,8 +268,7 @@ class SigmaMLP(nn.Module):
         
         if asym_act:
             for i in range(num_layers - 1):
-                fixed_C = fixed_masks.get(f'activations.{i}') if fixed_masks else None
-                self.activations.append(AsymSwiGLU(hidden_dim, mask_num=i, fixed_C=fixed_C))
+                self.activations.append(AsymSwiGLU(hidden_dim, mask_num=i))
         else:
             for i in range(num_layers - 1):
                 self.activations.append(nn.GELU())
@@ -315,18 +307,18 @@ class SigmaMLP(nn.Module):
 
 
 def create_mlp(symmetry, input_dim, hidden_dim, output_dim, num_layers, 
-               mask_params=None, norm='layer', fixed_masks=None, elementwise_affine=True, activation=None):
+               mask_params=None, norm='layer', elementwise_affine=True, activation=None):
     if symmetry == 0:
         activation = activation or 'relu'
         return MLP(input_dim, hidden_dim, output_dim, num_layers, norm, 
-                  mask_params, fixed_masks, elementwise_affine, activation)
+                  mask_params, elementwise_affine, activation)
     elif symmetry == 1:
         if mask_params is None:
             raise ValueError("mask_params required for W-Asym MLP")
         activation = activation or 'gelu'
         return WMLP(input_dim, hidden_dim, output_dim, num_layers, mask_params, norm, 
-                   fixed_masks, elementwise_affine, activation)
+                   elementwise_affine, activation)
     elif symmetry == 2:
-        return SigmaMLP(input_dim, hidden_dim, output_dim, num_layers, norm, fixed_masks)
+        return SigmaMLP(input_dim, hidden_dim, output_dim, num_layers, norm)
     else:
         raise ValueError(f"Invalid symmetry type: {symmetry}")

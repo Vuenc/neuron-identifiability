@@ -9,9 +9,8 @@ defaults:
   - logging: console
   - _self_
 
-# Multi-model experiment settings (optional)
+# Multi-model experiment settings
 num_models: 1
-use_fixed_masks: false
 
 # Global settings
 seed: 42

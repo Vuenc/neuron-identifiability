@@ -42,16 +42,8 @@ def set_seed(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-# def set_init_seed(init_seed):
-#     torch.manual_seed(init_seed)
-#     torch.cuda.manual_seed_all(init_seed)
 
-# def set_mask_seed(mask_seed):
-#     torch.manual_seed(mask_seed)
-#     torch.cuda.manual_seed_all(mask_seed)
-
-
-def create_model(cfg: DictConfig, fixed_masks=None, device=None):
+def create_model(cfg: DictConfig, device=None):
     if cfg.model.name == 'mlp_mnist':
         return create_mlp(
             symmetry=cfg.model.symmetry,
@@ -63,7 +55,6 @@ def create_model(cfg: DictConfig, fixed_masks=None, device=None):
             norm=cfg.model.norm,
             elementwise_affine=cfg.model.get('elementwise_affine', True),
             activation=cfg.model.get('activation', None),
-            fixed_masks=fixed_masks
         )
     elif cfg.model.name == 'resnet_cifar':
         return create_resnet(
@@ -72,10 +63,8 @@ def create_model(cfg: DictConfig, fixed_masks=None, device=None):
             w=cfg.model.w,
             mask_params=cfg.model.mask_params if cfg.model.symmetry == 1 else None,
             num_classes=cfg.model.num_classes,
-            fixed_masks=fixed_masks
         )
     elif cfg.model.name == 'gnn_arxiv':
-        # TODO: why don't we have fixed_masks here?
         return create_gnn(
             model_type=cfg.model.model_type,
             in_channels=cfg.model.in_channels,
@@ -166,33 +155,17 @@ def setup_wandb(cfg: DictConfig):
         return None
 
 
-# def generate_masks(cfg: DictConfig, output_dir: Path):
-#     print("Generating fixed masks...")
-#     set_mask_seed(cfg.get('mask_seed', cfg.seed))
-    
-#     dummy_model = create_model(cfg, device=cfg.device)
-#     save_masks(dummy_model, output_dir)
-#     print(f"Saved masks to {output_dir / 'fixed_masks'}")
-
-
 def train_multi(cfg: DictConfig, output_dir: Path, init_seeds: list):
-    num_models = cfg.get('num_models', 1)
-    # use_fixed_masks = cfg.get('use_fixed_masks', False)
     
+    num_models = cfg.get('num_models', 1)
     print(f"Multi-model: {num_models} models")
-    # print(f"Fixed masks: {use_fixed_masks}")
     
     wandb = setup_wandb(cfg)
-    
-    # if use_fixed_masks:
-    #     generate_masks(cfg, output_dir)
-    
     data_info = setup_data(cfg)
     
     cossim_enabled = (cfg.training.cosine_similarity.enabled and 
                      num_models == 2 and 
                      cfg.training.cosine_similarity.save_every is not None)
-    
     if cossim_enabled:
         print("Cossim enabled")
     
@@ -569,11 +542,7 @@ def interpolation_interval_analysis(cfg: DictConfig, output_dir: Path, data_info
 @hydra.main(version_base=None, config_path="configs", config_name="config")
 def main(cfg: DictConfig) -> None:
     
-    # set_seed(cfg.seed)
-    
     init_seeds_raw = cfg.get('init_seed', None)
-    # mask_seeds_raw = cfg.get('mask_seed', cfg.seed)
-    
     if init_seeds_raw is None:
         init_seeds = range(cfg.num_models)
     elif hasattr(init_seeds_raw, '__iter__'):
@@ -581,14 +550,8 @@ def main(cfg: DictConfig) -> None:
     else:
         init_seeds = [int(init_seeds_raw)]
     
-    # if hasattr(mask_seeds_raw, '__iter__'):
-    #     mask_seeds = [int(x) for x in mask_seeds_raw]
-    # else:
-    #     mask_seeds = [int(mask_seeds_raw)]
-    
     print(f"Global seed: {cfg.seed}")
     print(f"Init seed(s): {init_seeds}")
-    # print(f"Mask seed(s): {mask_seeds}")
     
     output_dir = Path(cfg.output_dir) / cfg.experiment_name
     output_dir.mkdir(parents=True, exist_ok=True)

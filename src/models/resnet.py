@@ -299,7 +299,7 @@ def w_resnet110(mask_params, w=1, num_classes=10):
 
 
 # Convenience function for backward compatibility
-def create_resnet(symmetry, depth, w=1, mask_params=None, num_classes=10, fixed_masks=None):
+def create_resnet(symmetry, depth, w=1, mask_params=None, num_classes=10):
     """Create ResNet based on symmetry type and depth.
     
     Args:
@@ -323,8 +323,6 @@ def create_resnet(symmetry, depth, w=1, mask_params=None, num_classes=10, fixed_
     elif symmetry == 1:
         if mask_params is None:
             raise ValueError("mask_params required for W-Asym ResNet")
-        if fixed_masks is not None:
-            print("Warning: fixed_masks not yet implemented for ResNet models")
         if depth == 20:
             return w_resnet20(mask_params, w=w, num_classes=num_classes)
         elif depth == 32:
