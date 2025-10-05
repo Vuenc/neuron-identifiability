@@ -262,7 +262,7 @@ def interpolate_models(model1, model2, train_loader, val_loader, test_loader,
         test_acc = metrics.get('test_accuracy', 0.0)
         test_loss = metrics.get('test_loss', 0.0)
         
-        print(f'Step {i+1:2d}/{steps+1} (λ={lam:.3f}): Train Acc={train_acc:.2f}%, Val Acc={val_acc:.2f}%, Train Loss={train_loss:.4f}, Val Loss={val_loss:.4f}')
+        print(f'Step {i+1:2d}/{steps+1} (λ={lam:.3f}): Train Acc={train_acc:.2f}%, Val Acc={val_acc:.2f}%, Test Acc={test_acc:.2f}%, Train Loss={train_loss:.4f}, Val Loss={val_loss:.4f}, Test Loss={test_loss:.4f}')
         
         # Log to wandb if enabled
         if use_wandb:
