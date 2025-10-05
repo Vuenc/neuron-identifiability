@@ -66,12 +66,13 @@ def create_model(cfg: DictConfig, device=None):
         )
     elif cfg.model.name == 'gnn_arxiv':
         return create_gnn(
-            model_type=cfg.model.model_type,
+            symmetry=cfg.model.symmetry,
             in_channels=cfg.model.in_channels,
             hidden_channels=cfg.model.hidden_channels,
             out_channels=cfg.model.out_channels,
             num_layers=cfg.model.num_layers,
             dropout=cfg.model.dropout,
+            model_type=cfg.model.model_type,
         )
     else:
         raise ValueError(f"Unknown model: {cfg.model.name}")

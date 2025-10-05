@@ -285,8 +285,8 @@ class AsymWGNN(MyGNN):
 
 
 # Convenience function for creating GNNs
-def create_gnn(model_type, in_channels, hidden_channels, out_channels, num_layers,
-               dropout):
+def create_gnn(symmetry, in_channels, hidden_channels, out_channels, num_layers,
+               dropout, model_type=None):
     """Create GNN based on model type.
     
     Args:
@@ -297,23 +297,23 @@ def create_gnn(model_type, in_channels, hidden_channels, out_channels, num_layer
         num_layers: Number of layers
         dropout: Dropout rate
     """
-    # TODO: take care of this, what is this configuring?
     C_lst = None
-    if model_type in ['asym_gelu_gnn', 'asym_swiglu_gnn', 'asym_w_gnn']:
+    if symmetry in (1, 2):
         C_lst = make_C_lst(hidden_channels, num_layers)
-    if model_type == 'gnn':
+    if symmetry == 0:
         lin_builder = nn.Linear
         return MyGNN(in_channels, hidden_channels, out_channels, num_layers, 
                     dropout, lin_builder=lin_builder)
-    elif model_type == 'asym_gelu_gnn':
-        lin_builder = nn.Linear
-        return AsymGeluGNN(in_channels, hidden_channels, out_channels, num_layers,
-                          dropout, C_lst, lin_builder=lin_builder)
-    elif model_type == 'asym_swiglu_gnn':
-        lin_builder = nn.Linear
-        return AsymSwiGLUGNN(in_channels, hidden_channels, out_channels, num_layers,
+    elif symmetry == 2:
+        if model_type == 'asym_gelu_gnn':
+            lin_builder = nn.Linear
+            return AsymGeluGNN(in_channels, hidden_channels, out_channels, num_layers,
                             dropout, C_lst, lin_builder=lin_builder)
-    elif model_type == 'asym_w_gnn':
+        else: # model_type == 'asym_swiglu_gnn'
+            lin_builder = nn.Linear
+            return AsymSwiGLUGNN(in_channels, hidden_channels, out_channels, num_layers,
+                                dropout, C_lst, lin_builder=lin_builder)
+    elif symmetry == 1:
         lin_builder = lambda in_dim, out_dim: SparseLinear(in_dim, out_dim, 
                                                           mask_constant=0.5, num_fixed=6, 
                                                           do_normal_mask=True, mask_type='random_subsets')
