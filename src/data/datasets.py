@@ -1,6 +1,7 @@
+from typing import List, Tuple
 import torch
 from torch.utils.data import DataLoader, random_split
-from torchvision import datasets, transforms
+import torchvision
 from ..core.registry import register
 from .transforms import get_transform
 
@@ -14,53 +15,105 @@ except ImportError:
     PygNodePropPredDataset = None
 
 
+# Optional imports for FFCV functionality
+try:
+    import ffcv.fields.decoders
+    import ffcv.pipeline.operation
+    import ffcv.transforms
+except ImportError:
+    print("Warning: FFCV not installed, FFCV dataloaders will not be available.")
+
+
+# Mean values for the datasets are computed on the training set (train_dataset, _, _ = create_train_val_test_split(train_val_dataset, val_split=0.1, test_split=0.0, seed=42))
+CIFAR10_MEAN = (0.4917, 0.4823, 0.4467)
+CIFAR10_STD = (0.2471, 0.2435, 0.2616)
+CIFAR100_MEAN = (0.5068, 0.4863, 0.4408)
+CIFAR100_STD = (0.2672, 0.2564, 0.2760)
+MNIST_MEAN = (0.1307)
+MNIST_STD = (0.3081)
+
+
 @register('dataset', 'mnist')
 def create_mnist_dataset(data_dir='./data', train=True, transform=None):
     if transform is None:
-        transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize((0.1307,), (0.3081,))
+        transform = torchvision.transforms.Compose([
+            torchvision.transforms.ToTensor(),
+            torchvision.transforms.Normalize(MNIST_MEAN, MNIST_STD)
         ])
     
-    return datasets.MNIST(root=data_dir, train=train, transform=transform, download=True)
+    return torchvision.datasets.MNIST(root=data_dir, train=train, transform=transform, download=True)
 
 
 @register('dataset', 'cifar10')
 def create_cifar10_dataset(data_dir='./data', train=True, transform=None):
     if transform is None:
         if train:
-            transform = transforms.Compose([
-                transforms.RandomHorizontalFlip(),
-                transforms.RandomCrop(32, 4),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            transform = torchvision.transforms.Compose([
+                torchvision.transforms.RandomHorizontalFlip(),
+                torchvision.transforms.RandomCrop(32, 4),
+                torchvision.transforms.ToTensor(),
+                torchvision.transforms.Normalize(mean=CIFAR10_MEAN, std=CIFAR10_STD)
             ])
         else:
-            transform = transforms.Compose([
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            transform = torchvision.transforms.Compose([
+                torchvision.transforms.ToTensor(),
+                torchvision.transforms.Normalize(mean=CIFAR10_MEAN, std=CIFAR10_STD)
             ])
     
-    return datasets.CIFAR10(root=data_dir, train=train, transform=transform, download=True)
+    return torchvision.datasets.CIFAR10(root=data_dir, train=train, transform=transform, download=True)
+
+
+def create_ffcv_dataloader_cifar(data_path, mean: Tuple[float, float, float], std: Tuple[float, float, float], train=True, batch_size=32, device="cuda:0", num_workers=-1):
+    assert ffcv # type: ignore
+    mean_u8: Tuple[int, int, int] = tuple([x * 255 for x in mean]) # type: ignore
+    std_u8: Tuple[int, int, int] = tuple(([x * 255 for x in std])) # type: ignore
+    label_pipeline: List[ffcv.pipeline.operation.Operation] = [ffcv.fields.decoders.IntDecoder(), ffcv.transforms.ToTensor(), ffcv.transforms.ToDevice(torch.device(device)), ffcv.transforms.Squeeze()]
+    image_pipeline: List[ffcv.pipeline.operation.Operation] = [ffcv.fields.decoders.SimpleRGBImageDecoder()]
+    if train:
+        image_pipeline.extend([
+            ffcv.transforms.RandomHorizontalFlip(),
+            ffcv.transforms.RandomTranslate(padding=4), # this is equivalent to RandomCrop(32, 4) since the input images are 32x32
+        ])
+    image_pipeline.extend([
+        ffcv.transforms.ToTensor(),
+        ffcv.transforms.ToDevice(torch.device(device), non_blocking=True),
+        ffcv.transforms.ToTorchImage(),
+        ffcv.transforms.Convert(torch.float32),
+        torchvision.transforms.Normalize(mean=mean_u8, std=std_u8) # type: ignore
+    ])
+
+    ordering = ffcv.loader.OrderOption.RANDOM if train else ffcv.loader.OrderOption.SEQUENTIAL
+
+    return ffcv.loader.Loader(data_path, batch_size=batch_size, num_workers=num_workers,
+                            order=ordering, drop_last=train, os_cache=True,
+                            pipelines={'image': image_pipeline, 'label': label_pipeline})
+
+
+def create_ffcv_dataloader_cifar10(data_path="ffcv/cifar10_train.beton", train=True, batch_size=128, device="cuda:0", num_workers=-1):
+    return create_ffcv_dataloader_cifar(data_path, mean=CIFAR10_MEAN, std=CIFAR10_STD, train=train, batch_size=batch_size, device=device, num_workers=num_workers)
+
+
+def create_ffcv_dataloader_cifar100(data_path="ffcv/cifar10_train.beton", train=True, batch_size=128, device="cuda:0", num_workers=-1):
+    return create_ffcv_dataloader_cifar(data_path, mean=CIFAR100_MEAN, std=CIFAR100_STD, train=train, batch_size=batch_size, device=device, num_workers=num_workers)
 
 
 @register('dataset', 'cifar100')
 def create_cifar100_dataset(data_dir='./data', train=True, transform=None):
     if transform is None:
         if train:
-            transform = transforms.Compose([
-                transforms.RandomHorizontalFlip(),
-                transforms.RandomCrop(32, 4),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            transform = torchvision.transforms.Compose([
+                torchvision.transforms.RandomHorizontalFlip(),
+                torchvision.transforms.RandomCrop(32, 4),
+                torchvision.transforms.ToTensor(),
+                torchvision.transforms.Normalize(mean=CIFAR100_MEAN, std=CIFAR100_STD)
             ])
         else:
-            transform = transforms.Compose([
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            transform = torchvision.transforms.Compose([
+                torchvision.transforms.ToTensor(),
+                torchvision.transforms.Normalize(mean=CIFAR100_MEAN, std=CIFAR100_STD)
             ])
     
-    return datasets.CIFAR100(root=data_dir, train=train, transform=transform, download=True)
+    return torchvision.datasets.CIFAR100(root=data_dir, train=train, transform=transform, download=True)
 
 
 @register('dataset', 'arxiv')
@@ -86,7 +139,6 @@ def create_dataset(dataset_name, data_dir='./data', train=True, transform=None, 
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}")
 
-
 def create_dataloader(dataset, batch_size=32, shuffle=True, num_workers=4, 
                      pin_memory=True, drop_last=False, **kwargs):
     return DataLoader(
@@ -98,7 +150,6 @@ def create_dataloader(dataset, batch_size=32, shuffle=True, num_workers=4,
         drop_last=drop_last,
         **kwargs
     )
-
 
 def create_train_val_test_split(dataset, val_split=0.1, test_split=0.1, seed=42):
 
@@ -113,40 +164,3 @@ def create_train_val_test_split(dataset, val_split=0.1, test_split=0.1, seed=42)
     )
     
     return train_dataset, val_dataset, test_dataset
-
-
-class LMCDataLoader:
-    
-    def __init__(self, dataset_name, data_dir='./data', batch_size=32, val_split=0.1, seed=42):
-        self.dataset_name = dataset_name
-        self.data_dir = data_dir
-        self.batch_size = batch_size
-        self.val_split = val_split
-        self.seed = seed
-        
-        self.train_dataset = create_dataset(dataset_name, data_dir, train=True)
-        self.test_dataset = create_dataset(dataset_name, data_dir, train=False)
-        
-        self.train_dataset, self.val_dataset = create_train_val_test_split(
-            self.train_dataset, val_split=val_split, test_split=0.0, seed=seed
-        )[0:2]
-        
-        self.train_loader = create_dataloader(self.train_dataset, batch_size, shuffle=True)
-        self.val_loader = create_dataloader(self.val_dataset, batch_size, shuffle=False)
-        self.test_loader = create_dataloader(self.test_dataset, batch_size, shuffle=False)
-    
-    def get_loaders(self):
-        return self.train_loader, self.val_loader, self.test_loader
-
-
-class GNNDataLoader:
-    
-    def __init__(self, data_dir='./data'):
-        self.data_dir = data_dir
-        
-        self.dataset = create_dataset('arxiv', data_dir)
-        self.data = self.dataset[0]
-        self.split_idx = self.dataset.get_idx_split()
-    
-    def get_data(self):
-        return self.data, self.split_idx

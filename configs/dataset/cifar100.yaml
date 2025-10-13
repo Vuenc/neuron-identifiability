@@ -1,5 +1,5 @@
 # @package dataset
-name: cifar10
+name: cifar100
 data_dir: ./data
 batch_size: 128
 val_split: 0.1

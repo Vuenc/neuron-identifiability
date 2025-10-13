@@ -5,3 +5,4 @@ batch_size: 64
 val_split: 0.1
 num_workers: 4
 pin_memory: true
+enable_ffcv: false

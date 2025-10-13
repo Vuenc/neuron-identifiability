@@ -15,7 +15,13 @@ from pathlib import Path
 
 from src.core.trainer import Trainer
 from src.core.gnn_trainer import GNNTrainer
-from src.data.datasets import create_dataset, create_dataloader, create_train_val_test_split
+from src.data.datasets import (
+    create_dataset,
+    create_dataloader,
+    create_train_val_test_split,
+    create_ffcv_dataloader_cifar10,
+    create_ffcv_dataloader_cifar100
+)
 from src.models.mlp import create_mlp
 from src.models.resnet import create_resnet
 from src.models.gnn import create_gnn
@@ -79,7 +85,45 @@ def create_model(cfg: DictConfig, device=None):
 
 
 def setup_data(cfg: DictConfig):
-    if cfg.dataset.name in ['mnist', 'cifar10', 'cifar100']:
+    if cfg.dataset.enable_ffcv:
+        if cfg.dataset.name not in ['cifar10', 'cifar100']:
+            raise ValueError(f"FFCV data loading is not supported for dataset {cfg.dataset.name}")
+        print("Using FFCV for data loading. Works best for large batch sizes (>= 256).")
+        create_ffcv_dataloader = {
+            "cifar10": create_ffcv_dataloader_cifar10,
+            "cifar100": create_ffcv_dataloader_cifar100
+        }[cfg.dataset.name]
+        train_path, val_path, test_path = {
+            "cifar10": ["ffcv/cifar10_train.beton", "ffcv/cifar10_val.beton", "ffcv/cifar10_test.beton"],
+            "cifar100": ["ffcv/cifar100_train.beton", "ffcv/cifar100_val.beton", "ffcv/cifar100_test.beton"]
+        }[cfg.dataset.name]
+        train_loader = create_ffcv_dataloader(
+            data_path=train_path,
+            train=True,
+            batch_size=cfg.dataset.batch_size,
+            device=cfg.device,
+            num_workers=cfg.dataset.num_workers,
+        )
+        val_loader = create_ffcv_dataloader(
+            data_path=val_path,
+            train=False,
+            batch_size=cfg.dataset.batch_size,
+            device=cfg.device,
+            num_workers=cfg.dataset.num_workers,
+        )
+        test_loader = create_ffcv_dataloader(
+            data_path=test_path,
+            train=False,
+            batch_size=cfg.dataset.batch_size,
+            device=cfg.device,
+            num_workers=cfg.dataset.num_workers,
+        )
+        return {
+            'train_loader': train_loader,
+            'val_loader': val_loader,
+            'test_loader': test_loader,
+        }
+    elif cfg.dataset.name in ['mnist', 'cifar10', 'cifar100']:
         train_dataset = create_dataset(cfg.dataset.name, cfg.dataset.data_dir, train=True)
         test_dataset = create_dataset(cfg.dataset.name, cfg.dataset.data_dir, train=False)
         train_dataset, val_dataset = create_train_val_test_split(
@@ -113,7 +157,7 @@ def setup_data(cfg: DictConfig):
             'train_dataset': train_dataset,
             'val_dataset': val_dataset,
             'test_dataset': test_dataset
-        }
+        }        
     elif cfg.dataset.name == 'arxiv':
         dataset = create_dataset(cfg.dataset.name, cfg.dataset.data_dir)
         data = dataset[0]
