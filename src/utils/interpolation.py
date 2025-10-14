@@ -10,60 +10,6 @@ from typing import Callable, List, Tuple, Dict, Any, Optional
 from pathlib import Path
 
 
-def interpolate_test(model1, model2, test_fn, steps=25, rewarm=False, data=None):
-    """Perform linear interpolation test between two models.
-    
-    Args:
-        model1: First model
-        model2: Second model
-        test_fn: Test function that takes a model and returns a metric
-        steps: Number of interpolation steps
-        rewarm: Whether to rewarm the models
-        data: Data for rewarming (if applicable)
-        
-    Returns:
-        List of test results for each interpolation step
-    """
-    import copy
-    
-    # Store original model states
-    state1 = copy.deepcopy(model1.state_dict())
-    state2 = copy.deepcopy(model2.state_dict())
-    
-    # Calculate distance and parameter count
-    dist = dist_sd(state1, state2)
-    num_params = get_num_params(model1)
-    print(f'Distance / params: {dist / num_params:.6f}')
-    
-    results = []
-    lambdas = torch.linspace(0, 1, steps=steps+1)
-    
-    for i, lam in enumerate(lambdas):
-        # Interpolate parameters
-        interpolated_state = lerp_sd(lam, state1, state2)
-        
-        # Load interpolated state into model1
-        model1.load_state_dict(interpolated_state)
-        
-        # Test the interpolated model
-        if rewarm and data is not None:
-            # Rewarm the model (simplified version)
-            model1.train()
-            for _ in range(10):  # Short rewarming
-                # This would need to be adapted based on the specific rewarming strategy
-                pass
-        
-        result = test_fn(model1)
-        results.append(result)
-        
-        print(f'Interpolation step {i+1}/{steps}: {result:.4f}')
-    
-    # Restore original model state
-    model1.load_state_dict(state1)
-    
-    return results
-
-
 def lerp_sd(lam, sd1, sd2):
     """Linear interpolation between two state dictionaries."""
     sd3 = copy.deepcopy(sd1)
@@ -402,46 +348,6 @@ def load_model_checkpoint(checkpoint_path, model_class, model_kwargs, device='cu
     model.to(device)
     
     return model
-
-
-def evaluate_checkpoint_interpolation(checkpoint_paths, model_class, model_kwargs, 
-                                    train_loader, val_loader, test_loader, 
-                                    interpolation_type='grid', steps=25, device='cuda', use_wandb=False):
-    """Evaluate interpolation between model checkpoints.
-    
-    Args:
-        checkpoint_paths: List of checkpoint paths
-        model_class: Model class to instantiate
-        model_kwargs: Keyword arguments for model creation
-        train_loader: Training data loader
-        val_loader: Validation data loader
-        test_loader: Test data loader
-        interpolation_type: 'grid' for 2 models, 'midpoint' for >2 models
-        steps: Number of interpolation steps (for grid)
-        device: Device to run evaluation on
-        use_wandb: Whether to log to wandb
-        
-    Returns:
-        Dictionary with interpolation results
-    """
-    # Load models from checkpoints
-    models = []
-    for checkpoint_path in checkpoint_paths:
-        model = load_model_checkpoint(checkpoint_path, model_class, model_kwargs, device)
-        models.append(model)
-    
-    if interpolation_type == 'grid' and len(models) == 2:
-        # Grid interpolation between 2 models
-        return interpolate_models(
-            models[0], models[1], train_loader, val_loader, test_loader, steps, device, use_wandb
-        )
-    elif len(models) >= 2:
-        # Midpoint evaluation for multiple models
-        return evaluate_midpoint_models(
-            models, train_loader, val_loader, test_loader, device, use_wandb
-        )
-    else:
-        raise ValueError(f"Invalid number of models: {len(models)}")
 
 
 def save_interpolation_results(results, output_dir, filename='interpolation_results.pt'):

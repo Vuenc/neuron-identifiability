@@ -66,10 +66,3 @@ def register(component_type: str, name: str, **kwargs):
 
 def build_component(component_type: str, name: str, **kwargs) -> Any:
     return REGISTRY.build(component_type, name, **kwargs)
-
-
-class BaseComponent(ABC):
-    
-    @abstractmethod
-    def __init__(self, **kwargs):
-        pass

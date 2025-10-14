@@ -3,7 +3,6 @@ import torch
 from torch.utils.data import DataLoader, random_split
 import torchvision
 from ..core.registry import register
-from .transforms import get_transform
 
 # Optional imports for GNN functionality
 try:
