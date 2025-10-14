@@ -17,11 +17,13 @@ except ImportError:
 
 # Optional imports for FFCV functionality
 try:
+    import ffcv
     import ffcv.fields.decoders
     import ffcv.pipeline.operation
     import ffcv.transforms
 except ImportError:
     print("Warning: FFCV not installed, FFCV dataloaders will not be available.")
+    ffcv = None
 
 
 # Mean values for the datasets are computed on the training set (train_dataset, _, _ = create_train_val_test_split(train_val_dataset, val_split=0.1, test_split=0.0, seed=42))

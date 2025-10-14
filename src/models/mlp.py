@@ -99,6 +99,39 @@ class SparseLinear(nn.Module):
         return F.linear(x, self.weight * self.mask.detach() + (1 - self.mask.detach()) * self.mask_constant * self.normal_mask, self.bias)
 
 
+class NoiseLinear(nn.Module):
+    """Linear layer with fixed Gaussian noise injection for symmetry breaking."""
+    def __init__(self, in_dim, out_dim, mask_num=0, mask_constant=1.0):
+        super().__init__()
+        
+        self.weight = nn.Parameter(torch.empty(out_dim, in_dim))
+        self.bias = nn.Parameter(torch.empty(out_dim))
+        
+        # Create fixed Gaussian noise similar to AsymSwiGLU's C initialization
+        g = torch.Generator()
+        g.manual_seed(abs(hash(str(mask_num) + str(0))))
+        noise = torch.randn(out_dim, in_dim, generator=g)
+        self.register_buffer('noise', noise, persistent=True)
+        
+        self.mask_num = mask_num
+        self.mask_constant = mask_constant
+        self.reset_parameters()
+    
+    def reset_parameters(self):
+        with torch.no_grad():
+            d_in = self.weight.size(1)
+            nn.init.normal_(self.weight, mean=0.0, std=1.0 / math.sqrt(d_in))
+            if self.bias is not None:
+                fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weight)
+                bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
+                nn.init.uniform_(self.bias, -bound, bound)
+    
+    def forward(self, x):
+        # Add scaled fixed noise to weights during forward pass
+        effective_weight = self.weight + self.mask_constant * self.noise
+        return F.linear(x, effective_weight, self.bias)
+
+
 @register('model', 'mlp_standard')
 class MLP(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, num_layers, norm='layer', 
@@ -245,6 +278,81 @@ class WMLP(nn.Module):
         return count
 
 
+@register('model', 'mlp_noise_asym')
+class NoiseMLP(nn.Module):
+    def __init__(self, input_dim, hidden_dim, output_dim, num_layers, 
+                 mask_params=None, norm='layer', elementwise_affine=True, activation='gelu'):
+        super().__init__()
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.output_dim = output_dim
+        self.num_layers = num_layers
+        self.activation = activation
+        
+        self.lins = nn.ModuleList()
+        self.norms = nn.ModuleList()
+        
+        # Handle normalization
+        self.norm_kind = norm
+        self.norm = setup_normalization(norm, hidden_dim, elementwise_affine)
+        
+        # Handle activation
+        self.activation_func = setup_activation(activation)
+        
+        def get_mask_params(layer_idx, default_params=None):
+            if default_params is None:
+                default_params = {
+                    'mask_constant': 1.0
+                }
+            
+            layer_key = f'linear_mask_params_{layer_idx}'
+            if layer_key in mask_params:
+                return {**default_params, **mask_params[layer_key]}
+            
+            if 'default' in mask_params:
+                return {**default_params, **mask_params['default']}
+            
+            return default_params
+        
+        if num_layers == 1:
+            first_layer_params = get_mask_params(0, mask_params.get('default', None) if mask_params else None)
+            self.lins.append(NoiseLinear(input_dim, output_dim, mask_num=0, **first_layer_params))
+        else:
+            first_layer_params = get_mask_params(0, mask_params.get('default', None) if mask_params else None)
+            self.lins.append(NoiseLinear(input_dim, hidden_dim, mask_num=0, **first_layer_params))
+            
+            for i in range(num_layers - 2):
+                hidden_layer_params = get_mask_params(i+1, mask_params.get('default', None) if mask_params else None)
+                self.lins.append(NoiseLinear(hidden_dim, hidden_dim, mask_num=i+1, **hidden_layer_params))
+            
+            output_layer_params = get_mask_params(num_layers-1, mask_params.get('default', None) if mask_params else None)
+            self.lins.append(NoiseLinear(hidden_dim, output_dim, mask_num=num_layers-1, **output_layer_params))
+            
+            # Add normalization layers
+            if self.norm_kind in ('layer', 'batch'):
+                for i in range(num_layers - 1):
+                    self.norms.append(self.norm(hidden_dim))
+            elif self.norm_kind in ('layer_linear', 'batch_linear'):
+                for i in range(num_layers - 1):
+                    v = total_output_variances_init(self.lins[i], use_realized_F=True)
+                    self.norms.append(self.norm(v))
+        
+        self.norm_type = norm
+    
+    def forward(self, x):
+        x = x.view(x.size(0), -1)  # Flatten the input
+        
+        for i in range(len(self.lins) - 1):
+            x = self.lins[i](x)
+            if self.norm_type:
+                x = self.norms[i](x)
+            if self.activation_func:
+                x = self.activation_func(x)
+        
+        x = self.lins[-1](x)
+        return x
+
+
 @register('model', 'mlp_sigma_asym')
 class SigmaMLP(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, num_layers, 
@@ -313,5 +421,10 @@ def create_mlp(symmetry, input_dim, hidden_dim, output_dim, num_layers,
                    elementwise_affine, activation)
     elif symmetry == 2:
         return SigmaMLP(input_dim, hidden_dim, output_dim, num_layers, norm)
+    elif symmetry == 3:
+        activation = activation or 'gelu'
+        return NoiseMLP(input_dim, hidden_dim, output_dim, num_layers, 
+                       mask_params=mask_params, norm=norm, elementwise_affine=elementwise_affine, 
+                       activation=activation)
     else:
         raise ValueError(f"Invalid symmetry type: {symmetry}")

@@ -57,7 +57,7 @@ def create_model(cfg: DictConfig, device=None):
             hidden_dim=cfg.model.hidden_dim,
             output_dim=cfg.model.output_dim,
             num_layers=cfg.model.num_layers,
-            mask_params=cfg.model.mask_params if cfg.model.symmetry == 1 else None,
+            mask_params=cfg.model.mask_params if cfg.model.symmetry in [1, 3] else None,
             norm=cfg.model.norm,
             elementwise_affine=cfg.model.get('elementwise_affine', True),
             activation=cfg.model.get('activation', None),
@@ -67,7 +67,7 @@ def create_model(cfg: DictConfig, device=None):
             symmetry=cfg.model.symmetry,
             depth=cfg.model.depth,
             w=cfg.model.w,
-            mask_params=cfg.model.mask_params if cfg.model.symmetry == 1 else None,
+            mask_params=cfg.model.mask_params if cfg.model.symmetry in [1, 3] else None,
             num_classes=cfg.model.num_classes,
         )
     elif cfg.model.name == 'gnn_arxiv':
@@ -85,6 +85,14 @@ def create_model(cfg: DictConfig, device=None):
 
 
 def setup_data(cfg: DictConfig):
+    if cfg.dataset.enable_ffcv:
+        # Check if FFCV is actually available
+        try:
+            import ffcv
+        except ImportError:
+            print("Warning: FFCV not available, falling back to standard data loading.")
+            cfg.dataset.enable_ffcv = False
+        
     if cfg.dataset.enable_ffcv:
         if cfg.dataset.name not in ['cifar10', 'cifar100']:
             raise ValueError(f"FFCV data loading is not supported for dataset {cfg.dataset.name}")

@@ -116,6 +116,9 @@ class Trainer:
             
             if hasattr(module, 'C') and module.C is not None:
                 mask_data.append(f"{name}_C:{module.C.cpu().numpy().tobytes()}")
+            
+            if hasattr(module, 'noise') and module.noise is not None:
+                mask_data.append(f"{name}_noise:{module.noise.cpu().numpy().tobytes()}")
         
         combined = "|".join(sorted(mask_data))
         return hashlib.md5(combined.encode()).hexdigest()[:8]

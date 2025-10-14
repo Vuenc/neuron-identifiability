@@ -95,6 +95,26 @@ def generate_fixed_masks(mask_params: Dict[str, Any], model_config: Dict[str, An
             C = torch.randn(hidden_dim, hidden_dim, generator=g)
             generated_masks[f'activation_{layer_idx}'] = C
     
+    elif model_config.get('symmetry') == 3:  # Noise-Asymmetric
+        from ..models.mlp import NoiseLinear
+        
+        num_layers = model_config['num_layers']
+        hidden_dim = model_config['hidden_dim']
+        input_dim = model_config['input_dim']
+        output_dim = model_config['output_dim']
+        
+        for layer_idx in range(num_layers):
+            if layer_idx == 0:
+                in_dim, out_dim = input_dim, hidden_dim
+            elif layer_idx == num_layers - 1:
+                in_dim, out_dim = hidden_dim, output_dim
+            else:
+                in_dim, out_dim = hidden_dim, hidden_dim
+            
+            # Create temporary layer to generate noise
+            temp_layer = NoiseLinear(in_dim, out_dim, mask_num=layer_idx)
+            generated_masks[f'layer_{layer_idx}'] = temp_layer.noise.clone()
+    
     # Save all masks
     for layer_name, mask in generated_masks.items():
         save_mask(mask, mask_path, layer_name)

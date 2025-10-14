@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from ..core.registry import register
+from .mlp import NoiseLinear
 
 # Global seed for mask generation (matching original)
 seed = 1
@@ -284,18 +285,30 @@ class AsymWGNN(MyGNN):
                         dropout, nonlin='asym_swiglu', lin_builder=lin_builder, C_lst=C_lst)
 
 
+@register('model', 'gnn_noise_asym')
+class NoiseGNN(MyGNN):
+    """Noise-Asymmetric GNN with noise injection for symmetry breaking."""
+    
+    def __init__(self, in_channels, hidden_channels, out_channels, num_layers,
+                 dropout, lin_builder=None):
+        super().__init__(in_channels, hidden_channels, out_channels, num_layers,
+                        dropout, nonlin='gelu', lin_builder=lin_builder, C_lst=None)
+
+
 # Convenience function for creating GNNs
 def create_gnn(symmetry, in_channels, hidden_channels, out_channels, num_layers,
-               dropout, model_type=None):
+               dropout, model_type=None, mask_params=None):
     """Create GNN based on model type.
     
     Args:
-        model_type: Type of GNN ('gnn', 'asym_gelu_gnn', 'asym_swiglu_gnn', 'asym_w_gnn')
+        symmetry: 0=Standard, 1=W-Asym, 2=Sigma-Asym, 3=Noise-Asym
         in_channels: Input feature dimension
         hidden_channels: Hidden feature dimension
         out_channels: Output feature dimension
         num_layers: Number of layers
         dropout: Dropout rate
+        model_type: Type of GNN ('gnn', 'asym_gelu_gnn', 'asym_swiglu_gnn', 'asym_w_gnn')
+        mask_params: Mask parameters (not used for GNN, kept for compatibility)
     """
     C_lst = None
     if symmetry in (1, 2):
@@ -319,5 +332,9 @@ def create_gnn(symmetry, in_channels, hidden_channels, out_channels, num_layers,
                                                           do_normal_mask=True, mask_type='random_subsets')
         return AsymWGNN(in_channels, hidden_channels, out_channels, num_layers,
                        dropout, C_lst, lin_builder=lin_builder)
+    elif symmetry == 3:
+        lin_builder = lambda in_dim, out_dim: NoiseLinear(in_dim, out_dim, mask_num=0, mask_constant=0.25)
+        return NoiseGNN(in_channels, hidden_channels, out_channels, num_layers,
+                       dropout, lin_builder=lin_builder)
     else:
-        raise ValueError(f"Invalid GNN model type: {model_type}")
+        raise ValueError(f"Invalid GNN symmetry type: {symmetry}")

@@ -11,6 +11,7 @@ import itertools
 import random
 import numpy as np
 from ..core.registry import register
+from .mlp import NoiseLinear
 
 
 class LambdaLayer(nn.Module):
@@ -77,6 +78,47 @@ class SparseConv2d(nn.Module):
         return (1 - self.mask.int()).sum().item()
 
 
+class NoiseConv2d(nn.Module):
+    """2D convolution with fixed Gaussian noise injection for symmetry breaking."""
+    
+    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, 
+                 padding=1, bias=False, mask_num=0, mask_constant=1.0):
+        super().__init__()
+        
+        self.weight = nn.Parameter(torch.empty(out_channels, in_channels, kernel_size, kernel_size))
+        if bias:
+            self.bias = nn.Parameter(torch.empty(out_channels))
+        else:
+            self.register_parameter('bias', None)
+        
+        # Create fixed Gaussian noise similar to AsymSwiGLU's C initialization
+        g = torch.Generator()
+        g.manual_seed(abs(hash(str(mask_num) + str(0))))
+        noise = torch.randn(out_channels, in_channels, kernel_size, kernel_size, generator=g)
+        self.register_buffer('noise', noise, persistent=True)
+        
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
+        self.mask_num = mask_num
+        self.mask_constant = mask_constant
+        self.reset_parameters()
+    
+    def reset_parameters(self):
+        nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        if self.bias is not None:
+            fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weight)
+            bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
+            nn.init.uniform_(self.bias, -bound, bound)
+    
+    def forward(self, x):
+        # Add scaled fixed noise to weights during forward pass
+        effective_weight = self.weight + self.mask_constant * self.noise
+        return F.conv2d(x, effective_weight, self.bias, stride=self.stride, padding=self.padding)
+
+
 class SparseBasicBlock(nn.Module):
     """Sparse ResNet basic block."""
     expansion = 1
@@ -137,6 +179,49 @@ class BasicBlock(nn.Module):
                 self.shortcut = nn.Sequential(
                     nn.Conv2d(in_planes, self.expansion * planes, kernel_size=1, 
                              stride=stride, bias=False),
+                    nn.GroupNorm(1, self.expansion * planes)
+                )
+
+    def forward(self, x):
+        out = F.relu(self.ln1(self.conv1(x)))
+        out = self.ln2(self.conv2(out))
+        out += self.shortcut(x)
+        out = F.relu(out)
+        return out
+
+
+class NoiseBasicBlock(nn.Module):
+    """ResNet basic block with noise injection for symmetry breaking."""
+    expansion = 1
+
+    def __init__(self, in_planes, planes, mask_num, mask_params, stride=1, option='B'):
+        super(NoiseBasicBlock, self).__init__()
+        
+        # Get mask parameters for this block, filtering out SparseConv2d-specific params
+        conv_params = mask_params.get('conv', {'mask_constant': 1.0})
+        skip_params = mask_params.get('skip', {'mask_constant': 1.0})
+        
+        # Filter out parameters that are not relevant for NoiseConv2d
+        noise_conv_params = {k: v for k, v in conv_params.items() if k in ['mask_constant']}
+        noise_skip_params = {k: v for k, v in skip_params.items() if k in ['mask_constant']}
+        
+        self.conv1 = NoiseConv2d(in_planes, planes, kernel_size=3, stride=stride, 
+                                padding=1, bias=False, mask_num=mask_num, **noise_conv_params)
+        self.ln1 = nn.GroupNorm(1, planes)
+        
+        self.conv2 = NoiseConv2d(planes, planes, kernel_size=3, stride=1, 
+                                padding=1, bias=False, mask_num=mask_num + 1, **noise_conv_params)
+        self.ln2 = nn.GroupNorm(1, planes)
+
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_planes != planes:
+            if option == 'A':
+                self.shortcut = LambdaLayer(lambda x:
+                    F.pad(x[:, :, ::2, ::2], (0, 0, 0, 0, planes//4, planes//4), "constant", 0))
+            elif option == 'B':
+                self.shortcut = nn.Sequential(
+                    NoiseConv2d(in_planes, self.expansion * planes, kernel_size=1, 
+                               stride=stride, padding=0, bias=False, mask_num=mask_num + 2, **noise_skip_params),
                     nn.GroupNorm(1, self.expansion * planes)
                 )
 
@@ -248,6 +333,61 @@ class WResNet(nn.Module):
         return out
 
 
+@register('model', 'resnet_noise_asym')
+class NoiseResNet(nn.Module):
+    """Noise-Asymmetric ResNet with noise injection for symmetry breaking."""
+    
+    def __init__(self, block, num_blocks, mask_params, w=1, num_classes=10):
+        super(NoiseResNet, self).__init__()
+        self.in_planes = 16 * w
+        mask_num = 0
+        
+        # Get mask parameters for conv_f, filtering out SparseConv2d-specific params
+        conv_f_params = mask_params.get('conv_f', {'mask_constant': 1.0})
+        noise_conv_f_params = {k: v for k, v in conv_f_params.items() if k in ['mask_constant']}
+        self.conv1 = NoiseConv2d(3, 16*w, kernel_size=3, stride=1, 
+                                padding=1, bias=False, mask_num=mask_num, **noise_conv_f_params)
+        self.ln1 = nn.GroupNorm(1, 16*w)
+        mask_num += 1
+
+        self.layer1 = self._make_layer(block, mask_num, 16*w, num_blocks[0], 
+                                     stride=1, mask_params=mask_params['conv_1'])
+        mask_num += num_blocks[0] * 3
+
+        self.layer2 = self._make_layer(block, mask_num, 32*w, num_blocks[1], 
+                                     stride=2, mask_params=mask_params['conv_2'])
+        mask_num += num_blocks[1] * 3
+
+        self.layer3 = self._make_layer(block, mask_num, 64*w, num_blocks[2], 
+                                     stride=2, mask_params=mask_params['conv_3'])
+        mask_num += num_blocks[2] * 3
+
+        # Get mask parameters for linear layer, filtering out SparseLinear-specific params
+        linear_params = mask_params.get('linear', {'mask_constant': 1.0})
+        noise_linear_params = {k: v for k, v in linear_params.items() if k in ['mask_constant']}
+        self.linear = NoiseLinear(64*w, num_classes, mask_num=mask_num, **noise_linear_params)
+        self.apply(_weights_init)
+
+    def _make_layer(self, block, mask_num, planes, num_blocks, stride, mask_params):
+        strides = [stride] + [1] * (num_blocks - 1)
+        layers = []
+        for stride in strides:
+            layers.append(block(self.in_planes, planes, mask_num, mask_params, stride))
+            mask_num += 3
+            self.in_planes = planes * block.expansion
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        out = F.relu(self.ln1(self.conv1(x)))
+        out = self.layer1(out)
+        out = self.layer2(out)
+        out = self.layer3(out)
+        out = F.avg_pool2d(out, out.size()[3])
+        out = out.view(out.size(0), -1)
+        out = self.linear(out)
+        return out
+
+
 # Convenience functions for different ResNet sizes
 @register('model', 'resnet20')
 def resnet20(w=1, num_classes=10):
@@ -297,15 +437,39 @@ def w_resnet110(mask_params, w=1, num_classes=10):
     return WResNet(SparseBasicBlock, [18, 18, 18], mask_params, w=w, num_classes=num_classes)
 
 
+@register('model', 'resnet_noise_asym_20')
+def noise_resnet20(mask_params, w=1, num_classes=10):
+    """Noise-Asymmetric ResNet-20."""
+    return NoiseResNet(NoiseBasicBlock, [3, 3, 3], mask_params, w=w, num_classes=num_classes)
+
+
+@register('model', 'resnet_noise_asym_32')
+def noise_resnet32(mask_params, w=1, num_classes=10):
+    """Noise-Asymmetric ResNet-32."""
+    return NoiseResNet(NoiseBasicBlock, [5, 5, 5], mask_params, w=w, num_classes=num_classes)
+
+
+@register('model', 'resnet_noise_asym_56')
+def noise_resnet56(mask_params, w=1, num_classes=10):
+    """Noise-Asymmetric ResNet-56."""
+    return NoiseResNet(NoiseBasicBlock, [9, 9, 9], mask_params, w=w, num_classes=num_classes)
+
+
+@register('model', 'resnet_noise_asym_110')
+def noise_resnet110(mask_params, w=1, num_classes=10):
+    """Noise-Asymmetric ResNet-110."""
+    return NoiseResNet(NoiseBasicBlock, [18, 18, 18], mask_params, w=w, num_classes=num_classes)
+
+
 # Convenience function for backward compatibility
 def create_resnet(symmetry, depth, w=1, mask_params=None, num_classes=10):
     """Create ResNet based on symmetry type and depth.
     
     Args:
-        symmetry: 0=Standard, 1=W-Asym
+        symmetry: 0=Standard, 1=W-Asym, 3=Noise-Asym
         depth: ResNet depth (20, 32, 56, 110)
         w: Width multiplier
-        mask_params: Mask parameters for W-Asym
+        mask_params: Mask parameters for W-Asym and Noise-Asym
         num_classes: Number of output classes
     """
     if symmetry == 0:
@@ -330,6 +494,19 @@ def create_resnet(symmetry, depth, w=1, mask_params=None, num_classes=10):
             return w_resnet56(mask_params, w=w, num_classes=num_classes)
         elif depth == 110:
             return w_resnet110(mask_params, w=w, num_classes=num_classes)
+        else:
+            raise ValueError(f"Invalid depth: {depth}")
+    elif symmetry == 3:
+        if mask_params is None:
+            raise ValueError("mask_params required for Noise-Asym ResNet")
+        if depth == 20:
+            return noise_resnet20(mask_params, w=w, num_classes=num_classes)
+        elif depth == 32:
+            return noise_resnet32(mask_params, w=w, num_classes=num_classes)
+        elif depth == 56:
+            return noise_resnet56(mask_params, w=w, num_classes=num_classes)
+        elif depth == 110:
+            return noise_resnet110(mask_params, w=w, num_classes=num_classes)
         else:
             raise ValueError(f"Invalid depth: {depth}")
     else:
