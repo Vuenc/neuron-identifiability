@@ -349,34 +349,3 @@ class Trainer:
             'parameters': parameters
         }, save_file)
         print(f"Saved parameters to {save_file}")
-    
-    def interpolate_test(self, 
-                        model2: nn.Module, 
-                        test_fn: Optional[Callable] = None,
-                        steps: int = 10) -> list:
-
-        if test_fn is None:
-            test_fn = lambda model: self.evaluate(self.test_loader, '')['accuracy']
-        
-        original_state = self.model.state_dict()
-        model2_state = model2.state_dict()
-        
-        results = []
-        
-        for i in range(steps + 1):
-            alpha = i / steps
-            
-            interpolated_state = {}
-            for key in original_state:
-                interpolated_state[key] = (1 - alpha) * original_state[key] + alpha * model2_state[key]
-            
-            self.model.load_state_dict(interpolated_state)
-            
-            result = test_fn(self.model)
-            results.append(result)
-            
-            print(f'Interpolation step {i}/{steps}: {result:.4f}')
-        
-        self.model.load_state_dict(original_state)
-        
-        return results

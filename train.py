@@ -27,7 +27,6 @@ from src.models.resnet import create_resnet
 from src.models.gnn import create_gnn
 from src.optimizers.optimizers import create_optimizer
 from src.optimizers.schedulers import create_scheduler
-from src.utils.mask_utils import save_masks, load_masks
 from src.utils.interpolation import (
     interpolate_models, 
     evaluate_midpoint_models,
@@ -364,7 +363,7 @@ def cossim_analysis(cfg: DictConfig, output_dir: Path):
         print("Warning: No checkpoints found")
 
 
-def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, epoch: int = None):
+def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, epoch: int | None = None):
     """Perform LMC interpolation analysis for a specific epoch or final models."""
     if epoch is not None:
         print(f"\nPerforming LMC interpolation at epoch {epoch}...")

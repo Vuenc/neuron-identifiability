@@ -16,10 +16,9 @@ seed = 1
 
 # Optional imports for GNN functionality
 try:
-    from torch_geometric.nn import GCNConv, SimpleConv
+    from torch_geometric.nn import SimpleConv
 except ImportError:
     print("Warning: torch_geometric not available. GNN functionality will be limited.")
-    GCNConv = None
     SimpleConv = None
 
 
@@ -47,7 +46,7 @@ class SparseLinear(nn.Module):
             else:
                 self.register_buffer('normal_mask', torch.ones(size = (out_dim, in_dim)), persistent=True) #torch.ones -> does nothing
 
-        hook = self.weight.register_hook(lambda grad: self.mask*grad) # zeros out gradients for masked parts
+        self.weight.register_hook(lambda grad: self.mask*grad) # zeros out gradients for masked parts
 
         if bias:
             self.bias = nn.Parameter(torch.empty(out_dim))
