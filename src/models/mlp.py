@@ -96,14 +96,7 @@ class SparseLinear(nn.Module):
                 nn.init.uniform_(self.bias, -bound, bound)
     
     def forward(self, x):
-        # # Apply mask and normal_mask like in the original implementation
-        # self.weight.data = (self.weight.data * self.mask + (1 - self.mask) * self.mask_constant * self.normal_mask)
-        # return F.linear(x, self.weight, self.bias)
-        if self.__dict__.get("disable_sparse_linear_data_replacement", False):
-            return F.linear(x, self.weight * self.mask.detach() + (1 - self.mask.detach()) * self.mask_constant * self.normal_mask, self.bias)
-        else:
-            self.weight.data = (self.weight.data * self.mask + (1 - self.mask) * self.mask_constant * self.normal_mask) 
-            return F.linear(x, self.weight, self.bias)
+        return F.linear(x, self.weight * self.mask.detach() + (1 - self.mask.detach()) * self.mask_constant * self.normal_mask, self.bias)
 
 
 @register('model', 'mlp_standard')

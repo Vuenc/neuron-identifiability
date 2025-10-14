@@ -69,8 +69,7 @@ class SparseConv2d(nn.Module):
             nn.init.uniform_(self.bias, -bound, bound)
     
     def forward(self, x):
-        self.weight.data = (self.weight.data * self.mask + (1-self.mask) * self.mask_constant * self.normal_mask)
-        out = F.conv2d(x, self.weight, stride=self.stride, padding=self.padding)
+        out = F.conv2d(x, (self.weight * self.mask.detach() + (1-self.mask.detach()) * self.mask_constant * self.normal_mask), stride=self.stride, padding=self.padding)
         return out
     
     def count_unused_params(self):
@@ -505,8 +504,7 @@ class SparseLinear(nn.Module):
             nn.init.uniform_(self.bias, -bound, bound)
 
     def forward(self, x):
-        self.weight.data = (self.weight.data * self.mask + (1-self.mask) * self.mask_constant * self.normal_mask)
-        return F.linear(x, (self.weight), self.bias)
+        return F.linear(x, (self.weight * self.mask.detach() + (1-self.mask.detach()) * self.mask_constant * self.normal_mask), self.bias)
 
     def count_unused_params(self):
         return (1-self.mask.int()).sum().item()
