@@ -8,48 +8,28 @@ depth: 20
 w: 1
 num_classes: 10
 
-# Mask parameters for W-Asym
+# Mask parameters for W-Asym and Noise-Asym
 mask_params:
-  conv_f:
-    mask_constant: 3
+  default:
+    mask_constant: 3.0
     mask_type: random_subsets
     do_normal_mask: true
+  conv_f:
     num_fixed: 12
   conv_1:
     conv:
-      mask_constant: 3
-      mask_type: random_subsets
-      do_normal_mask: true
       num_fixed: 36
     skip:
-      mask_constant: 3
-      mask_type: random_subsets
-      do_normal_mask: true
       num_fixed: 4
   conv_2:
     conv:
-      mask_constant: 3
-      mask_type: random_subsets
-      do_normal_mask: true
       num_fixed: 54
     skip:
-      mask_constant: 3
-      mask_type: random_subsets
-      do_normal_mask: true
       num_fixed: 6
   conv_3:
     conv:
-      mask_constant: 3
-      mask_type: random_subsets
-      do_normal_mask: true
       num_fixed: 72
     skip:
-      mask_constant: 3
-      mask_type: random_subsets
-      do_normal_mask: true
       num_fixed: 8
   linear:
-    mask_constant: 3
-    mask_type: random_subsets
-    do_normal_mask: true
     num_fixed: 8

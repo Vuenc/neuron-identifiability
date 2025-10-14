@@ -13,3 +13,10 @@ dropout: 0.0
 
 # For asymmetric models
 C_lst: null  # Will be generated if needed
+
+mask_params:
+  default:
+    mask_constant: 0.5
+    mask_type: random_subsets
+    do_normal_mask: true
+    num_fixed: 6
