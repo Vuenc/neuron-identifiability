@@ -3,6 +3,7 @@ ResNet models with asymmetric architectures.
 Refactored from lmc/models/models_resnet.py
 """
 
+from webbrowser import get
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -10,6 +11,7 @@ import math
 import itertools
 import random
 import numpy as np
+from omegaconf import OmegaConf
 from ..core.registry import register
 from .mlp import NoiseLinear
 
@@ -82,7 +84,7 @@ class NoiseConv2d(nn.Module):
     """2D convolution with fixed Gaussian noise injection for symmetry breaking."""
     
     def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, 
-                 padding=1, bias=False, mask_num=0, mask_constant=1.0):
+                 padding=1, bias=False, mask_num=0, mask_constant=1.0, **kwargs):
         super().__init__()
         
         self.weight = nn.Parameter(torch.empty(out_channels, in_channels, kernel_size, kernel_size))
@@ -197,20 +199,12 @@ class NoiseBasicBlock(nn.Module):
     def __init__(self, in_planes, planes, mask_num, mask_params, stride=1, option='B'):
         super(NoiseBasicBlock, self).__init__()
         
-        # Get mask parameters for this block, filtering out SparseConv2d-specific params
-        conv_params = mask_params.get('conv', {'mask_constant': 1.0})
-        skip_params = mask_params.get('skip', {'mask_constant': 1.0})
-        
-        # Filter out parameters that are not relevant for NoiseConv2d
-        noise_conv_params = {k: v for k, v in conv_params.items() if k in ['mask_constant']}
-        noise_skip_params = {k: v for k, v in skip_params.items() if k in ['mask_constant']}
-        
         self.conv1 = NoiseConv2d(in_planes, planes, kernel_size=3, stride=stride, 
-                                padding=1, bias=False, mask_num=mask_num, **noise_conv_params)
+                                padding=1, bias=False, mask_num=mask_num, **mask_params['conv'])
         self.ln1 = nn.GroupNorm(1, planes)
         
         self.conv2 = NoiseConv2d(planes, planes, kernel_size=3, stride=1, 
-                                padding=1, bias=False, mask_num=mask_num + 1, **noise_conv_params)
+                                padding=1, bias=False, mask_num=mask_num + 1, **mask_params['conv'])
         self.ln2 = nn.GroupNorm(1, planes)
 
         self.shortcut = nn.Sequential()
@@ -221,7 +215,7 @@ class NoiseBasicBlock(nn.Module):
             elif option == 'B':
                 self.shortcut = nn.Sequential(
                     NoiseConv2d(in_planes, self.expansion * planes, kernel_size=1, 
-                               stride=stride, padding=0, bias=False, mask_num=mask_num + 2, **noise_skip_params),
+                               stride=stride, padding=0, bias=False, mask_num=mask_num + 2, **mask_params['skip']),
                     nn.GroupNorm(1, self.expansion * planes)
                 )
 
@@ -285,24 +279,48 @@ class WResNet(nn.Module):
         self.in_planes = 16 * w
         mask_num = 0
         
+        def get_mask_params(layer_key):
+            default_params = mask_params.get('default', None)
+            if default_params is None:
+                default_params = {
+                    'mask_constant': 1.0,
+                    'mask_type': 'random_subsets',
+                    'do_normal_mask': True,
+                    'num_fixed': 64
+                }
+            if layer_key in ['conv_1', 'conv_2', 'conv_3']:
+                if layer_key in mask_params:
+                    output = {k: {**default_params, **mask_params[layer_key][k]} for k in ['conv', 'skip']}
+                else:
+                    output = {k: default_params for k in ['conv', 'skip']}
+                print(f"Mask params for {layer_key}.conv: {output['conv']}")
+                print(f"Mask params for {layer_key}.skip: {output['skip']}")
+            else:
+                if layer_key in mask_params:
+                    output = {**default_params, **mask_params[layer_key]}
+                else:
+                    output = default_params
+                print(f"Mask params for {layer_key}: {output}")
+            return output
+        
         self.conv1 = SparseConv2d(3, 16*w, mask_num, kernel_size=3, stride=1, 
-                                 padding=1, bias=False, **mask_params['conv_f'])
+                                 padding=1, bias=False, **get_mask_params('conv_f'))
         self.ln1 = nn.GroupNorm(1, 16*w)
         mask_num += 1
 
         self.layer1 = self._make_layer(block, mask_num, 16*w, num_blocks[0], 
-                                     stride=1, mask_params=mask_params['conv_1'])
+                                     stride=1, mask_params=get_mask_params('conv_1'))
         mask_num += num_blocks[0] * 3
 
         self.layer2 = self._make_layer(block, mask_num, 32*w, num_blocks[1], 
-                                     stride=2, mask_params=mask_params['conv_2'])
+                                     stride=2, mask_params=get_mask_params('conv_2'))
         mask_num += num_blocks[1] * 3
 
         self.layer3 = self._make_layer(block, mask_num, 64*w, num_blocks[2], 
-                                     stride=2, mask_params=mask_params['conv_3'])
+                                     stride=2, mask_params=get_mask_params('conv_3'))
         mask_num += num_blocks[2] * 3
 
-        self.linear = SparseLinear(64*w, num_classes, mask_num=mask_num, bias=False, **mask_params['linear'])
+        self.linear = SparseLinear(64*w, num_classes, mask_num=mask_num, bias=False, **get_mask_params('linear'))
         self.apply(_weights_init)
 
     def _make_layer(self, block, mask_num, planes, num_blocks, stride, mask_params):
@@ -342,30 +360,49 @@ class NoiseResNet(nn.Module):
         self.in_planes = 16 * w
         mask_num = 0
         
-        # Get mask parameters for conv_f, filtering out SparseConv2d-specific params
-        conv_f_params = mask_params.get('conv_f', {'mask_constant': 1.0})
-        noise_conv_f_params = {k: v for k, v in conv_f_params.items() if k in ['mask_constant']}
+        def get_mask_params(layer_key):
+            
+            def remove_unused_keys(params):
+                if params is None: return None
+                return {k: v for k, v in params.items() if k == 'mask_constant'}
+            
+            default_params = remove_unused_keys(mask_params.get('default', None))
+            if default_params is None:
+                print("No network-wide default params specified, falling back to global defaults")
+                default_params = {'mask_constant': 1.0}
+            if layer_key in ['conv_1', 'conv_2', 'conv_3']:
+                if layer_key in mask_params:
+                    output = {k: {**default_params, **remove_unused_keys(mask_params[layer_key][k])} for k in ['conv', 'skip']}
+                else:
+                    output = {k: default_params for k in ['conv', 'skip']}
+                print(f"Mask params for {layer_key}.conv: {output['conv']}")
+                print(f"Mask params for {layer_key}.skip: {output['skip']}")
+            else:
+                if layer_key in mask_params:
+                    output = {**default_params, **remove_unused_keys(mask_params[layer_key])}
+                else:
+                    output = default_params
+                print(f"Mask params for {layer_key}: {output}")
+            return output
+        
         self.conv1 = NoiseConv2d(3, 16*w, kernel_size=3, stride=1, 
-                                padding=1, bias=False, mask_num=mask_num, **noise_conv_f_params)
+                                padding=1, bias=False, mask_num=mask_num, **get_mask_params('conv_f'))
         self.ln1 = nn.GroupNorm(1, 16*w)
         mask_num += 1
 
         self.layer1 = self._make_layer(block, mask_num, 16*w, num_blocks[0], 
-                                     stride=1, mask_params=mask_params['conv_1'])
+                                     stride=1, mask_params=get_mask_params('conv_1'))
         mask_num += num_blocks[0] * 3
 
         self.layer2 = self._make_layer(block, mask_num, 32*w, num_blocks[1], 
-                                     stride=2, mask_params=mask_params['conv_2'])
+                                     stride=2, mask_params=get_mask_params('conv_2'))
         mask_num += num_blocks[1] * 3
 
         self.layer3 = self._make_layer(block, mask_num, 64*w, num_blocks[2], 
-                                     stride=2, mask_params=mask_params['conv_3'])
+                                     stride=2, mask_params=get_mask_params('conv_3'))
         mask_num += num_blocks[2] * 3
 
-        # Get mask parameters for linear layer, filtering out SparseLinear-specific params
-        linear_params = mask_params.get('linear', {'mask_constant': 1.0})
-        noise_linear_params = {k: v for k, v in linear_params.items() if k in ['mask_constant']}
-        self.linear = NoiseLinear(64*w, num_classes, mask_num=mask_num, **noise_linear_params)
+        self.linear = NoiseLinear(64*w, num_classes, mask_num=mask_num, **get_mask_params('linear'))
         self.apply(_weights_init)
 
     def _make_layer(self, block, mask_num, planes, num_blocks, stride, mask_params):

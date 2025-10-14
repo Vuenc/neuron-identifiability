@@ -101,7 +101,7 @@ class SparseLinear(nn.Module):
 
 class NoiseLinear(nn.Module):
     """Linear layer with fixed Gaussian noise injection for symmetry breaking."""
-    def __init__(self, in_dim, out_dim, mask_num=0, mask_constant=1.0):
+    def __init__(self, in_dim, out_dim, mask_num=0, mask_constant=1.0, **kwargs):
         super().__init__()
         
         self.weight = nn.Parameter(torch.empty(out_dim, in_dim))
@@ -210,40 +210,37 @@ class WMLP(nn.Module):
         # Handle activation
         self.activation_func = setup_activation(activation)
         
-        def get_mask_params(layer_idx, default_params=None):
+        def get_mask_params(layer_idx):
+            default_params = mask_params.get('default', None)
             if default_params is None:
+                print("No network-wide default params specified, falling back to global defaults")
                 default_params = {
                     'mask_constant': 1.0,
                     'mask_type': 'random_subsets',
                     'do_normal_mask': True,
                     'num_fixed': 64
                 }
-            
             layer_key = f'linear_mask_params_{layer_idx}'
             if layer_key in mask_params:
-                return {**default_params, **mask_params[layer_key]}
-            
-            if 'default' in mask_params:
-                return {**default_params, **mask_params['default']}
-            
-            return default_params
+                output = {**default_params, **mask_params[layer_key]}
+            else:
+                output = {**default_params, **mask_params['default']}
+            print(f"Mask params for linear{layer_idx}: {output}")
+            return output
         
         if num_layers == 1:
             self.lins.append(SparseLinear(input_dim, output_dim, 
                                         mask_num=0, **get_mask_params(0)))
         else:
-            first_layer_params = get_mask_params(0, mask_params.get('default', None))
             self.lins.append(SparseLinear(input_dim, hidden_dim, 
-                                        mask_num=0, **first_layer_params))
+                                        mask_num=0, **get_mask_params(0)))
             
             for i in range(num_layers - 2):
-                hidden_layer_params = get_mask_params(i+1, mask_params.get('default', None))
                 self.lins.append(SparseLinear(hidden_dim, hidden_dim, 
-                                            mask_num=i+1, **hidden_layer_params))
+                                            mask_num=i+1, **get_mask_params(i+1)))
             
-            output_layer_params = get_mask_params(num_layers-1)
             self.lins.append(SparseLinear(hidden_dim, output_dim, 
-                                        mask_num=num_layers-1, **output_layer_params))
+                                        mask_num=num_layers-1, **get_mask_params(num_layers-1)))
             
             # Add normalization layers
             if self.norm_kind in ('layer', 'batch'):
@@ -299,33 +296,30 @@ class NoiseMLP(nn.Module):
         # Handle activation
         self.activation_func = setup_activation(activation)
         
-        def get_mask_params(layer_idx, default_params=None):
+        def get_mask_params(layer_idx):
+            default_params = mask_params.get('default', None)
             if default_params is None:
-                default_params = {
-                    'mask_constant': 1.0
-                }
-            
+                default_params = {'mask_constant': 1.0}
             layer_key = f'linear_mask_params_{layer_idx}'
             if layer_key in mask_params:
-                return {**default_params, **mask_params[layer_key]}
-            
-            if 'default' in mask_params:
-                return {**default_params, **mask_params['default']}
-            
-            return default_params
+                output = {**default_params, **mask_params[layer_key]}
+            else:
+                output = default_params
+            print(f"Mask params for linear{layer_idx}: {output}")
+            return output
         
         if num_layers == 1:
-            first_layer_params = get_mask_params(0, mask_params.get('default', None) if mask_params else None)
+            first_layer_params = get_mask_params(0)
             self.lins.append(NoiseLinear(input_dim, output_dim, mask_num=0, **first_layer_params))
         else:
-            first_layer_params = get_mask_params(0, mask_params.get('default', None) if mask_params else None)
+            first_layer_params = get_mask_params(0)
             self.lins.append(NoiseLinear(input_dim, hidden_dim, mask_num=0, **first_layer_params))
             
             for i in range(num_layers - 2):
-                hidden_layer_params = get_mask_params(i+1, mask_params.get('default', None) if mask_params else None)
+                hidden_layer_params = get_mask_params(i+1)
                 self.lins.append(NoiseLinear(hidden_dim, hidden_dim, mask_num=i+1, **hidden_layer_params))
             
-            output_layer_params = get_mask_params(num_layers-1, mask_params.get('default', None) if mask_params else None)
+            output_layer_params = get_mask_params(num_layers-1)
             self.lins.append(NoiseLinear(hidden_dim, output_dim, mask_num=num_layers-1, **output_layer_params))
             
             # Add normalization layers
