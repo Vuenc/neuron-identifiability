@@ -132,10 +132,6 @@ class WMLP(nn.Module):
         x = self.lins[-1](x)
         return x
 
-    def disable_sparse_linear_data_replacement(self):
-        for lin in self.lins:
-            lin.disable_sparse_linear_data_replacement = True
-
     def count_unused_params(self):
         return sum(lin.count_unused_params() for lin in self.lins if type(lin) != nn.Linear)
 
@@ -235,12 +231,7 @@ class SparseLinear(nn.Module):
         self.reset_parameters()
 
     def forward(self, x):
-        if self.__dict__.get("disable_sparse_linear_data_replacement", False):
-            return F.linear(x, self.weight * self.mask.detach() + (1 - self.mask.detach()) * self.mask_constant * self.normal_mask, self.bias)
-            #return F.linear(x, self.mask * self.weight, self.bias)
-        else:
-            self.weight.data = (self.weight.data* self.mask + (1-self.mask)*self.mask_constant*self.normal_mask) 
-            return F.linear(x, self.weight, self.bias)
+        return F.linear(x, self.weight * self.mask.detach() + (1 - self.mask.detach()) * self.mask_constant * self.normal_mask, self.bias)
 
     # def reset_parameters(self):
     #     nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
