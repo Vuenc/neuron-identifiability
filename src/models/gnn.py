@@ -296,7 +296,7 @@ class NoiseGNN(MyGNN):
 
 # Convenience function for creating GNNs
 def create_gnn(symmetry, in_channels, hidden_channels, out_channels, num_layers,
-               dropout, model_type=None, mask_params=None):
+               dropout, mask_params=None, model_type=None):
     """Create GNN based on model type.
     
     Args:
@@ -307,7 +307,7 @@ def create_gnn(symmetry, in_channels, hidden_channels, out_channels, num_layers,
         num_layers: Number of layers
         dropout: Dropout rate
         model_type: Type of GNN ('gnn', 'asym_gelu_gnn', 'asym_swiglu_gnn', 'asym_w_gnn')
-        mask_params: Mask parameters (not used for GNN, kept for compatibility)
+        mask_params: Mask parameters
     """
     C_lst = None
     if symmetry in (1, 2):
@@ -325,14 +325,13 @@ def create_gnn(symmetry, in_channels, hidden_channels, out_channels, num_layers,
             lin_builder = nn.Linear
             return AsymSwiGLUGNN(in_channels, hidden_channels, out_channels, num_layers,
                                 dropout, C_lst, lin_builder=lin_builder)
+    # for now: mask_params only uses default values
     elif symmetry == 1:
-        lin_builder = lambda in_dim, out_dim: SparseLinear(in_dim, out_dim, 
-                                                          mask_constant=0.5, num_fixed=6, 
-                                                          do_normal_mask=True, mask_type='random_subsets')
+        lin_builder = lambda in_dim, out_dim: SparseLinear(in_dim, out_dim, **mask_params.get('default', {}))
         return AsymWGNN(in_channels, hidden_channels, out_channels, num_layers,
                        dropout, C_lst, lin_builder=lin_builder)
     elif symmetry == 3:
-        lin_builder = lambda in_dim, out_dim: NoiseLinear(in_dim, out_dim, mask_num=0, mask_constant=0.25)
+        lin_builder = lambda in_dim, out_dim: NoiseLinear(in_dim, out_dim, **mask_params.get('default', {}))
         return NoiseGNN(in_channels, hidden_channels, out_channels, num_layers,
                        dropout, lin_builder=lin_builder)
     else:

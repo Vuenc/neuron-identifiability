@@ -77,6 +77,7 @@ def create_model(cfg: DictConfig, device=None):
             out_channels=cfg.model.out_channels,
             num_layers=cfg.model.num_layers,
             dropout=cfg.model.dropout,
+            mask_params=cfg.model.mask_params if cfg.model.symmetry in [1, 3] else None,
             model_type=cfg.model.model_type,
         )
     else:
