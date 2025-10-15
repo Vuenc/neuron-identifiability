@@ -37,6 +37,11 @@ from src.utils.cosine_similarity import (
     compute_cossim_per_layer,
     compute_cossim_aggregate,
 )
+from src.utils.functional_similarity import (
+    compute_functional_similarity,
+    compute_functional_similarity_gnn,
+    compute_functional_similarity_aggregate,
+)
 
 
 def set_seed(seed):
@@ -222,6 +227,12 @@ def train_multi(cfg: DictConfig, output_dir: Path, init_seeds: list):
     if cossim_enabled:
         print("Cossim enabled")
     
+    func_sim_enabled = (cfg.training.functional_similarity.enabled and 
+                       num_models == 2 and 
+                       cfg.training.functional_similarity.save_every is not None)
+    if func_sim_enabled:
+        print("Functional similarity enabled")
+    
     model_results = []
     
     for model_idx in range(num_models):
@@ -268,6 +279,9 @@ def train_multi(cfg: DictConfig, output_dir: Path, init_seeds: list):
     
     if cossim_enabled and num_models == 2:
         cossim_analysis(cfg, output_dir)
+    
+    if func_sim_enabled and num_models == 2:
+        functional_similarity_analysis(cfg, output_dir, data_info)
     
     if cfg.interpolation.enabled and num_models >= 2:
         if cfg.interpolation.get('save_every') is not None:
@@ -360,6 +374,118 @@ def cossim_analysis(cfg: DictConfig, output_dir: Path):
         }, output_dir / "cossim_all_epochs.pt")
         
         print(f"\nSaved cossim results to {output_dir}/cossim_all_epochs.pt")
+    else:
+        print("Warning: No checkpoints found")
+
+
+def functional_similarity_analysis(cfg: DictConfig, output_dir: Path, data_info: dict):
+    """Perform functional similarity analysis between two models."""
+    print("\nComputing functional similarity...")
+    
+    model1_checkpoints = []
+    model2_checkpoints = []
+    
+    # Include epoch 0 (initialization) if available
+    try:
+        checkpoint1 = torch.load(output_dir / f"checkpoint_epoch_0_model_1.pt", map_location='cpu')
+        checkpoint2 = torch.load(output_dir / f"checkpoint_epoch_0_model_2.pt", map_location='cpu')
+        model1_checkpoints.append(checkpoint1)
+        model2_checkpoints.append(checkpoint2)
+        print("Found initialization checkpoints")
+    except FileNotFoundError:
+        print("Warning: Initialization checkpoints not found")
+    
+    for epoch in range(1, cfg.training.num_epochs + 1):
+        if cfg.training.save_every is None or epoch % cfg.training.save_every == 0:
+            try:
+                checkpoint1 = torch.load(output_dir / f"checkpoint_epoch_{epoch}_model_1.pt", map_location='cpu')
+                checkpoint2 = torch.load(output_dir / f"checkpoint_epoch_{epoch}_model_2.pt", map_location='cpu')
+                model1_checkpoints.append(checkpoint1)
+                model2_checkpoints.append(checkpoint2)
+            except FileNotFoundError:
+                print(f"Warning: Checkpoint epoch {epoch} not found")
+
+    if len(model1_checkpoints) > 0:
+        print(f"Found {len(model1_checkpoints)} checkpoints")
+        all_epoch_results = []
+        
+        # Create models for evaluation
+        model1 = create_model(cfg, device='cpu')
+        model2 = create_model(cfg, device='cpu')
+        
+        for i, (checkpoint1, checkpoint2) in enumerate(zip(model1_checkpoints, model2_checkpoints)):
+            epoch = i  # Now includes epoch 0
+            
+            # Load model states
+            model1.load_state_dict(checkpoint1['model_state_dict'])
+            model2.load_state_dict(checkpoint2['model_state_dict'])
+            
+            # Compute functional similarity
+            if cfg.model.name == 'gnn_arxiv':
+                # GNN case - use split indices
+                # Move models to the same device as data
+                device = data_info['data'].x.device
+                model1 = model1.to(device)
+                model2 = model2.to(device)
+                
+                results = compute_functional_similarity_gnn(
+                    model1, model2, 
+                    data_info['data'], 
+                    data_info['split_idx'], 
+                    device=device
+                )
+            else:
+                # Standard case - use data loaders
+                results = {}
+                for split in cfg.training.functional_similarity.splits:
+                    # Map split names to data_info keys
+                    split_key = f'{split}_loader' if f'{split}_loader' in data_info else split
+                    if split_key in data_info and data_info[split_key] is not None:
+                        split_results = compute_functional_similarity(
+                            model1, model2, 
+                            data_info[split_key], 
+                            device='cpu'
+                        )
+                        # Add split prefix to results
+                        for key, value in split_results.items():
+                            results[f'{split}_{key}'] = value
+            
+            # Compute aggregate similarity
+            aggregate_similarity = compute_functional_similarity_aggregate(results)
+            
+            epoch_results = {
+                'epoch': epoch,
+                'split_results': results,
+                'aggregate_similarity': aggregate_similarity,
+            }
+            
+            all_epoch_results.append(epoch_results)
+            
+            # Format individual split similarities
+            train_sim = results.get('train_functional_similarity', 0.0)
+            # Handle both 'val' and 'valid' split names
+            val_sim = results.get('val_functional_similarity', results.get('valid_functional_similarity', 0.0))
+            test_sim = results.get('test_functional_similarity', 0.0)
+            
+            print(f"Epoch {epoch} functional similarity: {aggregate_similarity:.4f} (Train: {train_sim:.4f}, Val: {val_sim:.4f}, Test: {test_sim:.4f})")
+            
+            if cfg.logging.get('use_wandb', False):
+                try:
+                    import wandb
+                    if wandb.run is not None:
+                        wandb.log({'functional_similarity_aggregate': aggregate_similarity})
+                        for key, value in results.items():
+                            if key.endswith('_functional_similarity'):
+                                wandb.log({f'functional_similarity_{key}': value})
+                except ImportError:
+                    print("Warning: wandb not available")
+
+        torch.save({
+            'all_epoch_results': all_epoch_results,
+            'num_epochs': len(all_epoch_results)
+        }, output_dir / "functional_similarity_all_epochs.pt")
+        
+        print(f"\nSaved functional similarity results to {output_dir}/functional_similarity_all_epochs.pt")
     else:
         print("Warning: No checkpoints found")
 

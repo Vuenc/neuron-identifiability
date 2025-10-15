@@ -16,4 +16,10 @@ cosine_similarity:
   enabled: true   # Enable cosine similarity computation between model updates
   save_every: 1   # Compute cosine similarity every N epochs (1 = every epoch)
 
+# Functional similarity analysis (for multi-model training with 2 models)
+functional_similarity:
+  enabled: false  # Enable functional similarity computation between model predictions
+  save_every: 1   # Compute functional similarity every N epochs (1 = every epoch)
+  splits: ['train', 'val', 'test']  # Which data splits to evaluate on
+
 
