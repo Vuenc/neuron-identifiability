@@ -47,7 +47,7 @@ def compute_functional_similarity(model1: nn.Module,
     functional_similarity = agreement_count / total_samples if total_samples > 0 else 0.0
     
     return {
-        'functional_similarity': functional_similarity,
+        'funcsim': functional_similarity,
         'agreement_count': agreement_count,
         'total_samples': total_samples
     }
@@ -93,7 +93,7 @@ def compute_functional_similarity_gnn(model1: nn.Module,
             total_samples = len(indices)
             functional_similarity = agreement / total_samples if total_samples > 0 else 0.0
             
-            results[f'{split_name}_functional_similarity'] = functional_similarity
+            results[f'{split_name}_funcsim'] = functional_similarity
             results[f'{split_name}_agreement_count'] = agreement
             results[f'{split_name}_total_samples'] = total_samples
     
@@ -113,7 +113,7 @@ def compute_functional_similarity_aggregate(results: Dict[str, float]) -> float:
     # Extract functional similarity scores (excluding count and total_samples)
     similarity_scores = []
     for key, value in results.items():
-        if key.endswith('_functional_similarity'):
+        if key.endswith('_funcsim'):
             similarity_scores.append(value)
     
     return np.mean(similarity_scores) if similarity_scores else 0.0

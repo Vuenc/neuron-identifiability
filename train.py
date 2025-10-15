@@ -462,30 +462,30 @@ def functional_similarity_analysis(cfg: DictConfig, output_dir: Path, data_info:
             all_epoch_results.append(epoch_results)
             
             # Format individual split similarities
-            train_sim = results.get('train_functional_similarity', 0.0)
+            train_sim = results.get('train_funcsim', 0.0)
             # Handle both 'val' and 'valid' split names
-            val_sim = results.get('val_functional_similarity', results.get('valid_functional_similarity', 0.0))
-            test_sim = results.get('test_functional_similarity', 0.0)
+            val_sim = results.get('val_funcsim', results.get('valid_funcsim', 0.0))
+            test_sim = results.get('test_funcsim', 0.0)
             
-            print(f"Epoch {epoch} functional similarity: {aggregate_similarity:.4f} (Train: {train_sim:.4f}, Val: {val_sim:.4f}, Test: {test_sim:.4f})")
+            print(f"Epoch {epoch} funcsim: {aggregate_similarity:.4f} (Train: {train_sim:.4f}, Val: {val_sim:.4f}, Test: {test_sim:.4f})")
             
             if cfg.logging.get('use_wandb', False):
                 try:
                     import wandb
                     if wandb.run is not None:
-                        wandb.log({'functional_similarity_aggregate': aggregate_similarity})
+                        wandb.log({'funcsim_aggregate': aggregate_similarity})
                         for key, value in results.items():
-                            if key.endswith('_functional_similarity'):
-                                wandb.log({f'functional_similarity_{key}': value})
+                            if key.endswith('_funcsim'):
+                                wandb.log({key: value})
                 except ImportError:
                     print("Warning: wandb not available")
 
         torch.save({
             'all_epoch_results': all_epoch_results,
             'num_epochs': len(all_epoch_results)
-        }, output_dir / "functional_similarity_all_epochs.pt")
+        }, output_dir / "funcsim_all_epochs.pt")
         
-        print(f"\nSaved functional similarity results to {output_dir}/functional_similarity_all_epochs.pt")
+        print(f"\nSaved functional similarity results to {output_dir}/funcsim_all_epochs.pt")
     else:
         print("Warning: No checkpoints found")
 
