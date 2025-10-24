@@ -492,116 +492,107 @@ def functional_similarity_analysis(cfg: DictConfig, output_dir: Path, data_info:
 
 def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, epoch: int | None = None):
     """Perform LMC interpolation analysis for a specific epoch or final models."""
-    if epoch is not None:
-        print(f"\nPerforming LMC interpolation at epoch {epoch}...")
-    else:
-        print("\nPerforming LMC interpolation...")
-    
     num_models = cfg.get('num_models', 1)
     interpolation_type = cfg.interpolation.type
-    
-    if interpolation_type == 'grid' and num_models != 2:
-        print(f"Warning: Grid needs 2 models, got {num_models}. Using midpoint.")
-        interpolation_type = 'midpoint'
-    elif interpolation_type == 'midpoint' and num_models < 2:
+
+    if interpolation_type == 'midpoint' and num_models < 2:
         print(f"Warning: Midpoint needs 2+ models, got {num_models}. Skipping LMC.")
         return None
-    
+
     def create_model_for_interpolation():
         return create_model(cfg, device=cfg.device)
-    
+
     target_epoch = epoch if epoch is not None else cfg.training.num_epochs
-    
+
     if interpolation_type == 'grid':
-        if epoch is not None:
-            print(f"Grid interpolation between 2 models at epoch {epoch}...")
-        else:
-            print("Grid interpolation between 2 models...")
+        print(f"Grid interpolation between all pairs of models{(f' at epoch {epoch}'    ) if epoch is not None else ''}...")
 
-        model1_state = torch.load(output_dir / f"checkpoint_epoch_{target_epoch}_model_1.pt", map_location=cfg.device)
-        model2_state = torch.load(output_dir / f"checkpoint_epoch_{target_epoch}_model_2.pt", map_location=cfg.device)
+        interpolation_table = None
+        PER_STEP_METRICS_KEYS = ['train_accuracy', 'val_accuracy', 'train_loss', 'val_loss', 'test_accuracy', 'test_loss']
+        SPLITS = ["train", "val", "test"]
+        try:
+            import wandb
+            if wandb.run is not None:
+                interpolation_table = wandb.Table(columns=[
+                    "interpolation_lambda", "model1_index", "model2_index", "model_pair",
+                    *[f"interpolation_{key}" for key in PER_STEP_METRICS_KEYS]
+                ])
+        except ImportError:
+            pass
 
-        model1 = create_model_for_interpolation()
-        model2 = create_model_for_interpolation()
-        model1.load_state_dict(model1_state['model_state_dict'])
-        model2.load_state_dict(model2_state['model_state_dict'])
-        model1.to(cfg.device)
-        model2.to(cfg.device)
+        for model1_index in range(1, num_models+1):
+            model1_state = torch.load(output_dir / f"checkpoint_epoch_{target_epoch}_model_{model1_index}.pt", map_location=cfg.device)
+            for model2_index in range(model1_index+1, num_models+1):
+                model2_state = torch.load(output_dir / f"checkpoint_epoch_{target_epoch}_model_{model2_index}.pt", map_location=cfg.device)
 
-        if cfg.model.name == 'gnn_arxiv':
-            interpolation_results = interpolate_gnn_models(
-                model1, model2, data_info['data'], data_info['split_idx'],
-                steps=cfg.interpolation.steps,
-                device=cfg.device,
-                use_wandb=False,
-                rewarm=True,
-            )
-        else:
-            interpolation_results = interpolate_models(
-                model1, model2, data_info['train_loader'], data_info['val_loader'], data_info['test_loader'],
-                steps=cfg.interpolation.steps,
-                device=cfg.device,
-                use_wandb=False
-            )
-        
-        if epoch is not None:
-            print(f"Grid interpolation at epoch {epoch} completed!")
-        else:
-            print(f"Grid interpolation completed!")
-        
-        if cfg.logging.get('use_wandb', False):
-            try:
-                import wandb
-                if wandb.run is not None:
-                    log_data = {
-                        'interpolation_type': 'grid',
-                        'interpolation_best_test_accuracy': max(interpolation_results['test_accuracy']),
-                        'interpolation_worst_test_accuracy': min(interpolation_results['test_accuracy']),
-                        'interpolation_barrier_height': interpolation_results['barrier_height'],
-                    }
-                    
-                    for i, (lam, train_acc, val_acc, test_acc, train_loss, val_loss, test_loss) in enumerate(zip(
-                        interpolation_results['lambdas'],
-                        interpolation_results['train_accuracy'],
-                        interpolation_results['val_accuracy'],
-                        interpolation_results['test_accuracy'],
-                        interpolation_results['train_loss'],
-                        interpolation_results['val_loss'],
-                        interpolation_results['test_loss']
-                    )):
-                        step_data = {
-                            'interpolation_lambda': lam,
-                            'interpolation_train_accuracy': train_acc,
-                            'interpolation_val_accuracy': val_acc,
-                            'interpolation_test_accuracy': test_acc,
-                            'interpolation_train_loss': train_loss,
-                            'interpolation_val_loss': val_loss,
-                            'interpolation_test_loss': test_loss,
-                        }
-                        
-                        if epoch is not None:
-                            epoch_step_data = {}
-                            for key, value in step_data.items():
-                                epoch_step_data[f'epoch_{epoch}_{key}'] = value
-                            wandb.log(epoch_step_data)
-                        else:
-                            wandb.log(step_data)
-                    
-                    if epoch is not None:
-                        epoch_log_data = {}
-                        for key, value in log_data.items():
-                            epoch_log_data[f'epoch_{epoch}_{key}'] = value
-                        wandb.log(epoch_log_data)
-                    else:
-                        wandb.log(log_data)
-            except ImportError:
-                print("Warning: wandb not available")
+                # We could reuse the model object, but recreate it to be on the safe side
+                model = create_model_for_interpolation().to(cfg.device)
+                if cfg.model.name == 'gnn_arxiv':
+                    raise NotImplementedError("gnn_arxiv interpolation has not been refactored yet.")
+                    interpolation_results = interpolate_gnn_models(
+                        model1, model2, data_info['data'], data_info['split_idx'],
+                        steps=cfg.interpolation.steps,
+                        device=cfg.device,
+                        use_wandb=False,
+                        rewarm=True,
+                    )
+                else:
+                    interpolation_results = interpolate_models(
+                        model, model1_state['model_state_dict'], model2_state['model_state_dict'],
+                        data_info['train_loader'], data_info['val_loader'], data_info['test_loader'],
+                        steps=cfg.interpolation.steps,
+                        device=cfg.device,
+                    )
+
+                print(f"Grid interpolation{(f' at epoch {epoch}'    ) if epoch is not None else ''} (model {model1_index} vs. model {model2_index}) completed!")
+                # Print summary
+                # # TODO condition this somehow - probably too many prints to do this for all pairs.
+                print(f'  Model distance: {interpolation_results["distance"]:.4f}')
+                print(f'  Normalized distance: {interpolation_results["normalized_distance"]:.6f}')
+                print(f"  Best accuracy (train/val/test): {'/'.join([f'{max(interpolation_results[f'{split}_accuracy']):.2f}%' for split in SPLITS])}")
+                print(f"  Worst accuracy (train/val/test): {'/'.join([f'{min(interpolation_results[f'{split}_accuracy']):.2f}%' for split in SPLITS])}")
+                print(f"  Barrier height (train/val/test): {'/'.join([f'{interpolation_results[f'{split}_barrier_height']:.2f}%' for split in SPLITS])}")
+                print(f"  Linearity: (train/val/test): {'/'.join([f'{interpolation_results[f'{split}_linearity']}' for split in SPLITS])}")
+
+                if cfg.logging.get('use_wandb', False):
+                    try:
+                        import wandb
+                        if wandb.run is not None:
+                            # Log the metrics that are computed per interpolation step
+                            assert interpolation_table is not None
+                            for i, interpolation_factor in enumerate(interpolation_results["lambdas"]):
+                                wandb.log({
+                                    'interpolation_lambda': interpolation_factor,
+                                    'model1_index': model1_index, 'model2_index': model2_index,
+                                    'epoch': epoch, # can be None
+                                    **{f'interpolation_{key}': interpolation_results[key][i] if key in interpolation_results else float('nan') for key in PER_STEP_METRICS_KEYS}
+                                })
+                                interpolation_table.add_data(
+                                    interpolation_factor, model1_index, model2_index, f"{model1_index}_{model2_index}",
+                                    *[interpolation_results[key][i] for key in PER_STEP_METRICS_KEYS]
+                                )
+
+                            wandb.log({
+                                'interpolation_type': 'grid',
+                                'model1_index': model1_index, 'model2_index': model2_index,
+                                **{f'interpolation_best_{split}_accuracy': max(interpolation_results[f'{split}_accuracy']) for split in SPLITS},
+                                **{f'interpolation_worst_{split}_accuracy': min(interpolation_results[f'{split}_accuracy']) for split in SPLITS},
+                                'epoch': epoch, # can be None
+                                **{f'interpolation_{split}_barrier_height': interpolation_results[f'{split}_barrier_height'] for split in SPLITS},
+                                'distance': interpolation_results['distance']
+                            })
+                    except ImportError:
+                        print("Warning: wandb not available")
+        if interpolation_table is not None:
+            import wandb
+            # Log custom plot to visualize interpolation of different metrics over model pairs nicely
+            wandb.log({
+                f"interpolation_plot_{key}": wandb.plot.line(interpolation_table, x="interpolation_lambda", y=f"interpolation_{key}", stroke="model_pair", title=f"Interpolation {key} plot", split_table=True)
+                for key in PER_STEP_METRICS_KEYS
+            })
         
     else:
-        if epoch is not None:
-            print(f"Midpoint evaluation for {num_models} models at epoch {epoch}...")
-        else:
-            print(f"Midpoint evaluation for {num_models} models...")
+        print(f"Midpoint interpolation between all pairs of models{(f' at epoch {epoch}'    ) if epoch is not None else ''}...")
         
         models = []
         for i in range(num_models):
