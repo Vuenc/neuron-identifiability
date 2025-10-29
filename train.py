@@ -205,7 +205,12 @@ def setup_wandb(cfg: DictConfig):
             if cfg.logging.get(param) is not None:
                 wandb_config[param] = cfg.logging[param]
         
-        wandb.init(**wandb_config)
+        run = wandb.init(**wandb_config)
+        
+        if run.sweep_id is not None:
+            cfg.experiment_name += f"__{run.sweep_id}"
+        cfg.experiment_name += f"__{run.id}"
+        
         print("Initialized wandb")
         return wandb
     except ImportError:
@@ -213,12 +218,19 @@ def setup_wandb(cfg: DictConfig):
         return None
 
 
-def train_multi(cfg: DictConfig, output_dir: Path, init_seeds: list):
+def train_multi(cfg: DictConfig, init_seeds: list, opt_seeds: list):
     
     num_models = cfg.get('num_models', 1)
     print(f"Multi-model: {num_models} models")
     
     wandb = setup_wandb(cfg)
+    
+    output_dir = Path(cfg.output_dir) / cfg.experiment_name
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with open(output_dir / "config.yaml", "w") as f:
+        OmegaConf.save(cfg, f)
+    print(f"Output dir: {output_dir}")
+    
     data_info = setup_data(cfg)
     
     cossim_enabled = (cfg.training.cosine_similarity.enabled and 
@@ -231,7 +243,7 @@ def train_multi(cfg: DictConfig, output_dir: Path, init_seeds: list):
                        num_models == 2 and 
                        cfg.training.functional_similarity.save_every is not None)
     if func_sim_enabled:
-        print("Functional similarity enabled")
+        print("Funcsim enabled")
     
     model_results = []
     
@@ -240,10 +252,14 @@ def train_multi(cfg: DictConfig, output_dir: Path, init_seeds: list):
         
         model_init_seed = init_seeds[model_idx % len(init_seeds)]
         set_seed(model_init_seed)
-        
         print(f"Init seed: {model_init_seed}")
         
         model = create_model(cfg, device=cfg.device)
+        
+        # Set optimizer seed before creating optimizer
+        model_opt_seed = opt_seeds[model_idx % len(opt_seeds)]
+        set_seed(model_opt_seed)
+        print(f"Opt seed: {model_opt_seed}")
         
         optimizer = create_optimizer(cfg.optimizer.name, model, **cfg.optimizer)
         scheduler = create_scheduler(cfg.scheduler.name, optimizer, **cfg.scheduler) if cfg.scheduler.name != 'none' else None
@@ -721,17 +737,20 @@ def main(cfg: DictConfig) -> None:
     else:
         init_seeds = [int(init_seeds_raw)]
     
+    opt_seeds_raw = cfg.get('opt_seed', None)
+    if opt_seeds_raw is None:
+        # Default to same as init_seeds if not specified
+        opt_seeds = init_seeds
+    elif hasattr(opt_seeds_raw, '__iter__'):
+        opt_seeds = [int(x) for x in opt_seeds_raw]
+    else:
+        opt_seeds = [int(opt_seeds_raw)]
+    
     print(f"Global seed: {cfg.seed}")
     print(f"Init seed(s): {init_seeds}")
-    
-    output_dir = Path(cfg.output_dir) / cfg.experiment_name
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    with open(output_dir / "config.yaml", "w") as f:
-        OmegaConf.save(cfg, f)
+    print(f"Opt seed(s): {opt_seeds}")
     
     print(f"Starting: {cfg.experiment_name}")
-    print(f"Output: {output_dir}")
     
     num_models = cfg.get('num_models', 1)
     cfg.num_models = num_models
@@ -743,8 +762,8 @@ def main(cfg: DictConfig) -> None:
     else:
         print(f"Multi-model training: {num_models} models")
     
-    train_multi(cfg, output_dir, init_seeds)
-    print(f"Completed. Results saved to {output_dir}")
+    train_multi(cfg, init_seeds, opt_seeds)
+    print(f"Completed.")
 
 
 if __name__ == "__main__":
