@@ -3,10 +3,11 @@ Linear Mode Connectivity interpolation utilities.
 Refactored from lmc/LMC_utils.py
 """
 
+from typing import Dict, List
 import torch
+import torch.utils
 import numpy as np
 import copy
-from typing import Callable, List, Tuple, Dict, Any, Optional
 from pathlib import Path
 
 
@@ -85,31 +86,34 @@ def compute_linearity(results, threshold=0.5):
     deviation = abs(actual_middle - expected_middle)
     return deviation < threshold
 
-
-def evaluate_model_comprehensive(model, train_loader, val_loader, test_loader, device='cuda'):
+def evaluate_model_comprehensive_batched(
+        stacked_models_forward, train_loader, val_loader, test_loader, device='cuda'
+) -> Dict[str, List]:
     """Evaluate model on train/val/test splits with comprehensive metrics.
-    
+
     Args:
-        model: Model to evaluate
+        stacked_models_forward: Function that takes an input with one data batch dimension and outputs the forward result
+            of multiple models as a tensor with one parameter batch dimension and one data batch dimension
         train_loader: Training data loader
-        val_loader: Validation data loader  
+        val_loader: Validation data loader
         test_loader: Test data loader
         device: Device to run evaluation on
-        
+
     Returns:
-        Dictionary with train/val/test metrics
+        Dictionary with train/val/test metrics:
+        - 'train_loss', 'val_loss', 'test_loss' as lists of floats
+        - 'train_accuracy', 'val_accuracy', 'test_accuracy' as lists of floats (range 0-100)
     """
-    model.eval()
     results = {}
-    
+
     for split_name, loader in [('train', train_loader), ('val', val_loader), ('test', test_loader)]:
         if loader is None:
             continue
-            
-        total_loss = 0.0
-        correct = 0
-        total = 0
-        
+
+        total_loss = None
+        correct_instances = None
+        total_instances = 0
+
         with torch.no_grad():
             for batch in loader:
                 if isinstance(batch, (list, tuple)):
@@ -117,38 +121,54 @@ def evaluate_model_comprehensive(model, train_loader, val_loader, test_loader, d
                 else:
                     data = batch.x
                     target = batch.y.squeeze()
-                
+
                 data, target = data.to(device), target.to(device)
-                
+
                 # Handle different data formats
                 if hasattr(data, 'x'):
                     # Graph data
+                    # TODO graph forward with stacked models
+                    raise NotImplementedError()
                     output = model(data.x, data.edge_index)
                 else:
                     # Regular data
-                    output = model(data)
-                
-                # Calculate loss
-                if hasattr(model, 'loss_fn'):
-                    loss = model.loss_fn(output, target)
+                    output = stacked_models_forward(data)
+
+                # In the stacked model output, dim 0 is the parameter batch dimension and dim 1 is the data batch dimension
+                # Calculate loss (reduction='none' is crucial since we have a batch of model parameters and a batch of data instances)
+                loss = torch.nn.functional.cross_entropy(
+                    output.view(output.shape[0] * output.shape[1], *output.shape[2:]),
+                    target.repeat(output.shape[0]),
+                    reduction='none')
+                loss = loss.reshape(*output.shape[:2]).mean(dim=1) # loss averaged over data batch, but kept separate over model params batch
+
+                if total_loss is None:
+                    total_loss = loss
                 else:
-                    loss = torch.nn.functional.cross_entropy(output, target)
-                
-                total_loss += loss.item()
-                
+                    total_loss += loss
+
                 # Calculate accuracy
-                pred = output.argmax(dim=1)
-                correct += pred.eq(target).sum().item()
-                total += target.size(0)
-        
-        results[f'{split_name}_loss'] = total_loss / len(loader)
-        results[f'{split_name}_accuracy'] = 100.0 * correct / total
-    
+                pred = output.argmax(dim=2)
+                correct = (pred == target[None]).sum(dim=1)
+                if correct_instances is None:
+                    correct_instances = correct
+                else:
+                    correct_instances += correct
+                total_instances += target.size(0)
+
+        assert total_loss is not None and correct_instances is not None
+
+        # results[f'{split_name}_loss'] = total_loss / len(loader) # TODO this is wrong, isn't it? -> maybe it was approximately not wrong with the CE reduction='mean'
+        results[f'{split_name}_loss'] = (total_loss / total_instances).tolist()
+        results[f'{split_name}_accuracy'] = (100.0 * correct_instances / total_instances).tolist()
+
     return results
 
 
-def interpolate_models(model1, model2, train_loader, val_loader, test_loader, 
-                                   steps=25, device='cuda', use_wandb=False):
+def interpolate_models(
+        model: torch.nn.Module, model1_state, model2_state,
+        train_loader, val_loader, test_loader,
+        steps=25, device='cuda'):
     """Perform comprehensive interpolation between two models.
     
     Args:
@@ -159,100 +179,59 @@ def interpolate_models(model1, model2, train_loader, val_loader, test_loader,
         test_loader: Test data loader
         steps: Number of interpolation steps
         device: Device to run evaluation on
-        use_wandb: Whether to log to wandb
         
     Returns:
         Dictionary with interpolation results
     """
-    # Store original states
-    state1 = copy.deepcopy(model1.state_dict())
-    state2 = copy.deepcopy(model2.state_dict())
+    model.eval()
+
+    def interpolate_tensors(t1, t2):
+        interpolation_factors = torch.linspace(0, 1, steps, device=t1.device).view(steps, *([1] * t1.ndim))
+        return t1 * (1-interpolation_factors) + t2 * interpolation_factors
+    # Define a function (params, inputs) -> outputs, where inputs have one data batch dimension and outputs has one params batch and one data batch dimension 
+    stacked_models_forward = torch.vmap(lambda params, inputs: torch.func.functional_call(model, params, inputs), in_dims=(0, None))
+
+    # Using tree_map, create a state dict where each leaf value is a stacked tensor of all interpolated versions of that parameter between the two models
+    interpolated_parameters = torch.utils._pytree.tree_map(interpolate_tensors, model1_state, model2_state) # type: ignore[import]
+
+    # TODO introduce batching over parameters (maybe for large models 20 model evaluations at once is too much)
+    # TODO it might be smart to use other data loaders (larger batches for train, for example) for added efficiency
+
+    metrics_keys = ['train_accuracy', 'val_accuracy', 'train_loss', 'val_loss', 'test_accuracy', 'test_loss']
+
+    # Evaluate interpolated model
+    metrics = evaluate_model_comprehensive_batched(
+        lambda inputs: stacked_models_forward(interpolated_parameters, inputs),
+        train_loader, val_loader, test_loader, device
+    )
     
+    interpolation_factors = torch.linspace(0, 1, steps=steps).tolist()
+
     # Calculate distance metrics
-    dist = dist_sd(state1, state2)
-    num_params = get_num_params(model1)
+    dist = dist_sd(model1_state, model2_state)
+    num_params = get_num_params(model)
+    # TODO better divide by sqrt(num_params) = length of n-dim 1-vector?
     normalized_dist = dist / num_params
-    
-    print(f'Model distance: {dist:.4f}')
-    print(f'Normalized distance: {normalized_dist:.6f}')
-    
-    # Interpolation results
+
+    # Calculate barriers and linearity
+    splits = ["train", "val", "test"]
+    barrier_heights = {
+        f"{split}_barrier_height": compute_barrier(metrics[f'{split}_accuracy']) for split in splits
+    }
+    linearity_values = {
+        f"{split}_linearity": compute_linearity(metrics[f'{split}_accuracy']) for split in splits
+    }
+
+    # Store results
     results = {
-        'lambdas': [],
-        'train_loss': [],
-        'train_accuracy': [],
-        'val_loss': [],
-        'val_accuracy': [],
-        'test_loss': [],
-        'test_accuracy': [],
+        'lambdas': interpolation_factors,
+        **{key: metrics[key] if key in metrics else float('nan') for key in metrics_keys},
         'distance': dist,
         'normalized_distance': normalized_dist,
-        'num_params': num_params
+        'num_params': num_params,
+        **barrier_heights,
+        **linearity_values
     }
-    
-    lambdas = torch.linspace(0, 1, steps=steps+1)
-    
-    for i, lam in enumerate(lambdas):
-        # Interpolate parameters
-        interpolated_state = lerp_sd(lam, state1, state2)
-        model1.load_state_dict(interpolated_state)
-        
-        # Evaluate interpolated model
-        metrics = evaluate_model_comprehensive(model1, train_loader, val_loader, test_loader, device)
-        
-        # Print meaningful metrics for this step
-        train_acc = metrics.get('train_accuracy', 0.0)
-        val_acc = metrics.get('val_accuracy', 0.0)
-        train_loss = metrics.get('train_loss', 0.0)
-        val_loss = metrics.get('val_loss', 0.0)
-        test_acc = metrics.get('test_accuracy', 0.0)
-        test_loss = metrics.get('test_loss', 0.0)
-        
-        print(f'Step {i+1:2d}/{steps+1} (λ={lam:.3f}): Train Acc={train_acc:.2f}%, Val Acc={val_acc:.2f}%, Test Acc={test_acc:.2f}%, Train Loss={train_loss:.4f}, Val Loss={val_loss:.4f}, Test Loss={test_loss:.4f}')
-        
-        # Log to wandb if enabled
-        if use_wandb:
-            try:
-                import wandb
-                if wandb.run is not None:
-                    wandb.log({
-                        'interpolation_lambda': lam.item(),
-                        'interpolation_train_loss': train_loss,
-                        'interpolation_train_accuracy': train_acc,
-                        'interpolation_val_loss': val_loss,
-                        'interpolation_val_accuracy': val_acc,
-                        'interpolation_test_loss': test_loss,
-                        'interpolation_test_accuracy': test_acc,
-                    })
-            except ImportError:
-                print("Warning: wandb not available for logging")
-        
-        # Store results
-        results['lambdas'].append(lam.item())
-        results['train_loss'].append(train_loss)
-        results['train_accuracy'].append(train_acc)
-        results['val_loss'].append(val_loss)
-        results['val_accuracy'].append(val_acc)
-        results['test_loss'].append(test_loss)
-        results['test_accuracy'].append(test_acc)
-    
-    # Restore original state
-    model1.load_state_dict(state1)
-    
-    # Calculate additional metrics
-    results['barrier_height'] = compute_barrier(results['test_accuracy'])
-    results['linearity'] = compute_linearity(results['test_accuracy'])
-    
-    # Print summary
-    print(f"\nGrid interpolation summary:")
-    print(f"  Best train accuracy: {max(results['train_accuracy']):.2f}%")
-    print(f"  Best val accuracy: {max(results['val_accuracy']):.2f}%")
-    print(f"  Best test accuracy: {max(results['test_accuracy']):.2f}%")
-    print(f"  Worst train accuracy: {min(results['train_accuracy']):.2f}%")
-    print(f"  Worst val accuracy: {min(results['val_accuracy']):.2f}%")
-    print(f"  Worst test accuracy: {min(results['test_accuracy']):.2f}%")
-    print(f"  Barrier height: {results['barrier_height']:.2f}%")
-    print(f"  Linearity: {results['linearity']}")
     
     return results
 
@@ -297,9 +276,13 @@ def evaluate_midpoint_models(models, train_loader, val_loader, test_loader, devi
     
     # Load average state into base model
     base_model.load_state_dict(avg_state)
-    
-    # Evaluate midpoint model
-    results = evaluate_model_comprehensive(base_model, train_loader, val_loader, test_loader, device)
+
+    # Simulate batched forward for single model
+    batched_forward = lambda input: base_model.forward(input).unsqueeze(0)
+
+    # Evaluate midpoint model and unpack the batched metrics
+    results = evaluate_model_comprehensive_batched(batched_forward, train_loader, val_loader, test_loader, device)
+    results = {key: metric for key, [metric] in results.items()}
     
     # Add metadata
     results['num_models'] = len(models)
