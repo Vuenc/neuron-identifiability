@@ -184,6 +184,8 @@ def interpolate_models(
         Dictionary with interpolation results
     """
     model.eval()
+    
+    steps += 1 # include endpoints
 
     def interpolate_tensors(t1, t2):
         interpolation_factors = torch.linspace(0, 1, steps, device=t1.device).view(steps, *([1] * t1.ndim))
@@ -210,8 +212,7 @@ def interpolate_models(
     # Calculate distance metrics
     dist = dist_sd(model1_state, model2_state)
     num_params = get_num_params(model)
-    # TODO better divide by sqrt(num_params) = length of n-dim 1-vector?
-    normalized_dist = dist / num_params
+    normalized_dist = dist / np.sqrt(num_params)
 
     # Calculate barriers and linearity
     splits = ["train", "val", "test"]
@@ -232,6 +233,16 @@ def interpolate_models(
         **barrier_heights,
         **linearity_values
     }
+    
+    for (i, lam, train_acc, val_acc, test_acc,
+         train_loss, val_loss, test_loss) in \
+        zip(range(steps), interpolation_factors,
+            metrics['train_accuracy'], metrics['val_accuracy'],
+            metrics['test_accuracy'], metrics['train_loss'],
+            metrics['val_loss'], metrics['test_loss']):
+        print(f'Step {i+1:2d}/{steps} (λ={lam:.3f}): '
+              f'Train Acc={train_acc:.2f}%, Val Acc={val_acc:.2f}%, Test Acc={test_acc:.2f}%, '
+              f'Train Loss={train_loss:.4f}, Val Loss={val_loss:.4f}, Test Loss={test_loss:.4f}')
     
     return results
 

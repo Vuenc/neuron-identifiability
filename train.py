@@ -544,12 +544,11 @@ def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, e
                 # We could reuse the model object, but recreate it to be on the safe side
                 model = create_model_for_interpolation().to(cfg.device)
                 if cfg.model.name == 'gnn_arxiv':
-                    raise NotImplementedError("gnn_arxiv interpolation has not been refactored yet.")
                     interpolation_results = interpolate_gnn_models(
-                        model1, model2, data_info['data'], data_info['split_idx'],
+                        model, model1_state['model_state_dict'], model2_state['model_state_dict'],
+                        data_info['data'], data_info['split_idx'],
                         steps=cfg.interpolation.steps,
                         device=cfg.device,
-                        use_wandb=False,
                         rewarm=True,
                     )
                 else:

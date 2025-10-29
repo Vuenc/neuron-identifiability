@@ -59,8 +59,8 @@ class SparseLinear(nn.Module):
         self.reset_parameters()
 
     def forward(self, x):
-        self.weight.data = (self.weight.data* self.mask + (1-self.mask)*self.mask_constant*self.normal_mask)
-        return F.linear(x, (self.weight), self.bias)
+        effective_weight = self.weight * self.mask + (1-self.mask)*self.mask_constant*self.normal_mask
+        return F.linear(x, effective_weight, self.bias)
 
     def reset_parameters(self):
         nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
