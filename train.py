@@ -300,10 +300,10 @@ def train_multi(cfg: DictConfig, init_seeds: list, opt_seeds: list):
         functional_similarity_analysis(cfg, output_dir, data_info)
     
     if cfg.interpolation.enabled and num_models >= 2:
-        if cfg.interpolation.get('save_every') is not None:
-            interpolation_interval_analysis(cfg, output_dir, data_info)
-        else:
-            interpolation_analysis(cfg, output_dir, data_info)
+        save_every = cfg.interpolation.get('save_every')
+        epochs_to_save = [None] if save_every is None else range(0, cfg.training.num_epochs + 1, save_every)
+        for epoch in epochs_to_save:
+            interpolation_analysis(cfg, output_dir, data_info, epoch=epoch)
     
     if wandb:
         try:
@@ -561,7 +561,6 @@ def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, e
 
                 print(f"Grid interpolation{(f' at epoch {epoch}'    ) if epoch is not None else ''} (model {model1_index} vs. model {model2_index}) completed!")
                 # Print summary
-                # # TODO condition this somehow - probably too many prints to do this for all pairs.
                 print(f'  Model distance: {interpolation_results["distance"]:.4f}')
                 print(f'  Normalized distance: {interpolation_results["normalized_distance"]:.6f}')
                 print(f"  Best accuracy (train/val/test): {'/'.join([f'{max(interpolation_results[f'{split}_accuracy']):.2f}%' for split in SPLITS])}")
@@ -662,59 +661,6 @@ def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, e
         save_interpolation_results(interpolation_results, output_dir)
     
     return interpolation_results
-
-
-def interpolation_interval_analysis(cfg: DictConfig, output_dir: Path, data_info: dict):
-    
-    print("\nComputing interval-based interpolation analysis...")
-    save_every = cfg.interpolation.get('save_every', None)
-    if save_every is None:
-        print("Warning: Interpolation save_every not configured")
-        return
-    print(f"Analyzing every {save_every} epochs")
-    
-    all_epoch_results = []
-    
-    for epoch in range(0, cfg.training.num_epochs + 1):
-        if epoch % save_every == 0:
-            print(f"Running interpolation analysis for epoch {epoch}...")
-            results = interpolation_analysis(cfg, output_dir, data_info, epoch=epoch)
-            
-            if results is not None:
-                epoch_results = {
-                    'epoch': epoch,
-                    'interpolation_results': results
-                }
-                all_epoch_results.append(epoch_results)
-                
-                if 'test_accuracy' in results:
-                    if isinstance(results['test_accuracy'], list):
-                        # Grid interpolation - show best and worst
-                        best_acc = max(results['test_accuracy'])
-                        worst_acc = min(results['test_accuracy'])
-                        print(f"Epoch {epoch} interpolation completed - Test acc: {best_acc:.4f}% (best), {worst_acc:.4f}% (worst)")
-                    else:
-                        # Midpoint interpolation - single value
-                        print(f"Epoch {epoch} interpolation completed - Test acc: {results['test_accuracy']:.4f}%")
-                elif 'barrier_height' in results:
-                    print(f"Epoch {epoch} interpolation completed - Barrier height: {results['barrier_height']:.4f}")
-                else:
-                    print(f"Epoch {epoch} interpolation completed")
-            else:
-                print(f"Warning: Interpolation analysis failed for epoch {epoch}")
-    
-    if len(all_epoch_results) > 0:
-        torch.save({
-            'all_epoch_results': all_epoch_results,
-            'num_epochs': len(all_epoch_results),
-            'save_every': save_every
-        }, output_dir / "interpolation_all_epochs.pt")
-        
-        print(f"\nSaved interval interpolation results to {output_dir}/interpolation_all_epochs.pt")
-        print(f"Completed interpolation analysis for {len(all_epoch_results)} epochs")
-    else:
-        print("Warning: No interpolation results found")
-
 
 @hydra.main(version_base=None, config_path="configs", config_name="config")
 def main(cfg: DictConfig) -> None:
