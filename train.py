@@ -65,6 +65,7 @@ def create_model(cfg: DictConfig, device=None):
             norm=cfg.model.norm,
             elementwise_affine=cfg.model.get('elementwise_affine', True),
             activation=cfg.model.get('activation', None),
+            mask_seed=cfg.mask_seed,
         )
     elif cfg.model.name == 'resnet_cifar':
         return create_resnet(
@@ -73,6 +74,7 @@ def create_model(cfg: DictConfig, device=None):
             w=cfg.model.w,
             mask_params=cfg.model.mask_params if cfg.model.symmetry in [1, 3] else None,
             num_classes=cfg.model.num_classes,
+            mask_seed=cfg.mask_seed,
         )
     elif cfg.model.name == 'gnn_arxiv':
         return create_gnn(
@@ -84,6 +86,7 @@ def create_model(cfg: DictConfig, device=None):
             dropout=cfg.model.dropout,
             mask_params=cfg.model.mask_params if cfg.model.symmetry in [1, 3] else None,
             model_type=cfg.model.model_type,
+            mask_seed=cfg.mask_seed,
         )
     else:
         raise ValueError(f"Unknown model: {cfg.model.name}")
@@ -218,8 +221,7 @@ def setup_wandb(cfg: DictConfig):
         return None
 
 
-def train_multi(cfg: DictConfig, init_seeds: list, opt_seeds: list):
-    
+def train_multi(cfg: DictConfig, init_seeds: list, optimization_seeds: list):
     num_models = cfg.get('num_models', 1)
     print(f"Multi-model: {num_models} models")
     
@@ -257,9 +259,9 @@ def train_multi(cfg: DictConfig, init_seeds: list, opt_seeds: list):
         model = create_model(cfg, device=cfg.device)
         
         # Set optimizer seed before creating optimizer
-        model_opt_seed = opt_seeds[model_idx % len(opt_seeds)]
-        set_seed(model_opt_seed)
-        print(f"Opt seed: {model_opt_seed}")
+        model_optimization_seed = optimization_seeds[model_idx % len(optimization_seeds)]
+        set_seed(model_optimization_seed)
+        print(f"Opt seed: {model_optimization_seed}")
         
         optimizer = create_optimizer(cfg.optimizer.name, model, **cfg.optimizer)
         scheduler = create_scheduler(cfg.scheduler.name, optimizer, **cfg.scheduler) if cfg.scheduler.name != 'none' else None
@@ -667,24 +669,24 @@ def main(cfg: DictConfig) -> None:
     
     init_seeds_raw = cfg.get('init_seed', None)
     if init_seeds_raw is None:
-        init_seeds = range(cfg.num_models)
+        init_seeds = list(range(cfg.num_models))
     elif hasattr(init_seeds_raw, '__iter__'):
         init_seeds = [int(x) for x in init_seeds_raw]
     else:
         init_seeds = [int(init_seeds_raw)]
     
-    opt_seeds_raw = cfg.get('opt_seed', None)
-    if opt_seeds_raw is None:
+    optimization_seeds_raw = cfg.get('optimization_seed', None)
+    if optimization_seeds_raw is None:
         # Default to same as init_seeds if not specified
-        opt_seeds = init_seeds
-    elif hasattr(opt_seeds_raw, '__iter__'):
-        opt_seeds = [int(x) for x in opt_seeds_raw]
+        optimization_seeds = init_seeds
+    elif hasattr(optimization_seeds_raw, '__iter__'):
+        optimization_seeds = [int(x) for x in optimization_seeds_raw]
     else:
-        opt_seeds = [int(opt_seeds_raw)]
+        optimization_seeds = [int(optimization_seeds_raw)]
     
     print(f"Global seed: {cfg.seed}")
     print(f"Init seed(s): {init_seeds}")
-    print(f"Opt seed(s): {opt_seeds}")
+    print(f"Opt seed(s): {optimization_seeds}")
     
     print(f"Starting: {cfg.experiment_name}")
     
@@ -698,7 +700,7 @@ def main(cfg: DictConfig) -> None:
     else:
         print(f"Multi-model training: {num_models} models")
     
-    train_multi(cfg, init_seeds, opt_seeds)
+    train_multi(cfg, init_seeds, optimization_seeds)
     print(f"Completed.")
 
 

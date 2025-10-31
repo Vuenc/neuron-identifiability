@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from ..core.registry import register
-from .mlp import NoiseLinear
+from .mlp import NoiseLinear, SparseLinear
 
 # Global seed for mask generation (matching original)
 seed = 1
@@ -21,124 +21,6 @@ except ImportError:
     print("Warning: torch_geometric not available. GNN functionality will be limited.")
     SimpleConv = None
 
-
-class SparseLinear(nn.Module):
-    """Sparse linear layer - EXACT COPY from gnn/asym_nets.py"""
-    
-    def __init__(self, in_dim, out_dim, bias=True, mask_type='densest', mask_constant=1, mask_num=0, num_fixed=6, do_normal_mask=True, mask_path=None):
-        super().__init__()
-        assert out_dim < 2**in_dim, 'out dim cannot be much higher than in dim'
-        
-        if mask_path is not None:
-            mask, _ = torch.load(mask_path)
-        else:
-            mask = make_mask(in_dim, out_dim, mask_type=mask_type, num_fixed = num_fixed, mask_num = mask_num)
-
-        self.register_buffer('mask', mask, persistent=True)
-        self.weight = nn.Parameter(torch.empty((out_dim, in_dim)))
-
-        if mask_path is not None:
-            _, n_mask = torch.load(mask_path)
-            self.register_buffer('normal_mask', n_mask, persistent=True)
-        else:
-            if do_normal_mask:
-                self.register_buffer('normal_mask', normal_mask(out_dim, in_dim, mask_num), persistent=True)
-            else:
-                self.register_buffer('normal_mask', torch.ones(size = (out_dim, in_dim)), persistent=True) #torch.ones -> does nothing
-
-        self.weight.register_hook(lambda grad: self.mask*grad) # zeros out gradients for masked parts
-
-        if bias:
-            self.bias = nn.Parameter(torch.empty(out_dim))
-        else:
-            self.register_parameter('bias', None)
-
-        self.mask_constant = mask_constant
-        self.mask_num = mask_num
-        self.num_fixed = num_fixed
-        self.reset_parameters()
-
-    def forward(self, x):
-        effective_weight = self.weight * self.mask + (1-self.mask)*self.mask_constant*self.normal_mask
-        return F.linear(x, effective_weight, self.bias)
-
-    def reset_parameters(self):
-        nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
-        self.weight.data = (self.weight.data* self.mask + (1-self.mask)*self.mask_constant*self.normal_mask) #set entries where mask is zero to the normal mask at that point
-
-        if self.bias is not None:
-            fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weight)
-            bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
-            nn.init.uniform_(self.bias, -bound, bound)
-
-    def count_unused_params(self):
-        return (1-self.mask.int()).sum().item()
-
-
-# EXACT COPY of mask generation functions from gnn/asym_nets.py
-def get_subset(num_cols, row_idx, num_sample, mask_num):
-    g = torch.Generator()
-    g.manual_seed(row_idx + abs(hash(str(mask_num) + str(seed))))
-    indices = torch.arange(num_cols)
-    return (indices[torch.randperm(num_cols, generator = g)[:num_sample]])
-
-def normal_mask(out_dim, in_dim, mask_num):
-    g = torch.Generator()
-    g.manual_seed(abs(hash(str(mask_num)+ str(seed))))
-    return torch.randn(size=(out_dim,in_dim), generator = g)
-
-def make_mask(in_dim, out_dim, mask_num = 0, num_fixed = 6, mask_type='densest'):
-    # out_dim x in_dim matrix
-    # where each row is unique
-    assert out_dim < 2**(in_dim)
-    assert in_dim > 0 and out_dim > 0
-
-    if mask_type == 'densest':
-        mask = torch.ones(out_dim, in_dim)
-        mask[0, :] = 1 # first row is dense
-        row_idx = 1
-        if out_dim == 1:
-            return mask
-
-        for nz in range(1, in_dim):
-            for zeros_in_row in itertools.combinations(range(in_dim), nz):
-                mask[row_idx, zeros_in_row] = 0
-                row_idx += 1
-                if row_idx >= out_dim:
-                    return mask
-    elif mask_type == 'bound_zeros':
-        # other type of mask based on lower bounding sparsity to break symmetries more
-        mask = torch.ones(out_dim, in_dim)
-        least_zeros = 2
-        row_idx = 0
-        for nz in range(least_zeros, in_dim):
-            for zeros_in_row in itertools.combinations(range(in_dim), nz):
-                mask[row_idx, zeros_in_row] = 0
-                row_idx += 1
-                if row_idx >= out_dim:
-                    return mask
-
-        raise ValueError('Error in making mask, possibly because out_dim is too large for these settings')
-
-    elif mask_type == 'random_subsets':
-            # other type of mask based on lower bounding sparsity to break symmetries more
-            mask = torch.ones(out_dim, in_dim)
-            row_idx = 0
-            least_zeros = num_fixed
-            for nz in range(least_zeros, in_dim):
-                while True:
-
-                    zeros_in_row = get_subset(in_dim, row_idx, least_zeros, mask_num)
-                    mask[row_idx, zeros_in_row] = 0
-                    row_idx += 1
-                    if row_idx >= out_dim:
-                        return mask
-
-            raise ValueError('Error in making mask, possibly because out_dim is too large for these settings')
-    else:
-        raise ValueError('Invalid mask type')
-    
-    
 def make_C_lst(hidden_channels, num_layers):
     import math
     g = torch.Generator()
@@ -176,7 +58,7 @@ class AsymSwiGLU(nn.Module):
 class MyConv(nn.Module):
     """Custom convolution layer for GNNs."""
     
-    def __init__(self, in_dim, out_dim, nonlin='gelu', C=None, lin_builder=None):
+    def __init__(self, in_dim, out_dim, nonlin='gelu', C=None, lin_builder=None, mask_rng: torch.Generator|None=None):
         super().__init__()
         
         if nonlin == 'gelu':
@@ -193,7 +75,7 @@ class MyConv(nn.Module):
         else:
             raise ImportError("torch_geometric is required for GNN functionality")
         self.mlp = nn.Sequential(
-            lin_builder(in_dim, out_dim), 
+            lin_builder(in_dim, out_dim, mask_rng), 
             nn.BatchNorm1d(out_dim), 
             nonlin_module
         )
@@ -216,20 +98,24 @@ class MyGNN(torch.nn.Module):
     """Standard GNN."""
     
     def __init__(self, in_channels, hidden_channels, out_channels, num_layers,
-                 dropout, nonlin='gelu', lin_builder=None, C_lst=None):
+                 dropout, nonlin='gelu', lin_builder=None, C_lst=None, mask_seed=None):
         super().__init__()
+
+        mask_rng = torch.Generator()
+        if mask_seed is not None:
+            mask_rng.manual_seed(mask_seed)
         
         self.convs = torch.nn.ModuleList()
         self.convs.append(MyConv(in_channels, hidden_channels, nonlin=nonlin, 
-                                C=C_lst[0] if C_lst else None, lin_builder=lin_builder))
+                                C=C_lst[0] if C_lst else None, lin_builder=lin_builder, mask_rng=mask_rng))
         
         for i in range(num_layers - 1):
             self.convs.append(
                 MyConv(hidden_channels, hidden_channels, nonlin=nonlin, 
-                      C=C_lst[i+1] if C_lst else None, lin_builder=lin_builder)
+                      C=C_lst[i+1] if C_lst else None, lin_builder=lin_builder, mask_rng=mask_rng)
             )
         
-        self.lin = lin_builder(hidden_channels, out_channels)
+        self.lin = lin_builder(hidden_channels, out_channels, mask_rng)
         self.dropout = dropout
 
     def reset_parameters(self):
@@ -259,9 +145,9 @@ class AsymGeluGNN(MyGNN):
     """GNN with asymmetric GELU activations."""
     
     def __init__(self, in_channels, hidden_channels, out_channels, num_layers,
-                 dropout, C_lst, lin_builder=None):
+                 dropout, C_lst, lin_builder=None, mask_seed=None):
         super().__init__(in_channels, hidden_channels, out_channels, num_layers,
-                        dropout, nonlin='asym_gelu', lin_builder=lin_builder, C_lst=C_lst)
+                        dropout, nonlin='asym_gelu', lin_builder=lin_builder, C_lst=C_lst, mask_seed=mask_seed)
 
 
 @register('model', 'gnn_asym_swiglu')
@@ -269,9 +155,9 @@ class AsymSwiGLUGNN(MyGNN):
     """GNN with asymmetric SwiGLU activations."""
     
     def __init__(self, in_channels, hidden_channels, out_channels, num_layers,
-                 dropout, C_lst, lin_builder=None):
+                 dropout, C_lst, lin_builder=None, mask_seed=None):
         super().__init__(in_channels, hidden_channels, out_channels, num_layers,
-                        dropout, nonlin='asym_swiglu', lin_builder=lin_builder, C_lst=C_lst)
+                        dropout, nonlin='asym_swiglu', lin_builder=lin_builder, C_lst=C_lst, mask_seed=mask_seed)
 
 
 @register('model', 'gnn_asym_w')
@@ -279,9 +165,9 @@ class AsymWGNN(MyGNN):
     """GNN with asymmetric weights (sparse linear layers)."""
     
     def __init__(self, in_channels, hidden_channels, out_channels, num_layers,
-                 dropout, C_lst, lin_builder=None):
+                 dropout, C_lst, lin_builder=None, mask_seed=None):
         super().__init__(in_channels, hidden_channels, out_channels, num_layers,
-                        dropout, nonlin='asym_swiglu', lin_builder=lin_builder, C_lst=C_lst)
+                        dropout, nonlin='asym_swiglu', lin_builder=lin_builder, C_lst=C_lst, mask_seed=mask_seed)
 
 
 @register('model', 'gnn_noise_asym')
@@ -289,14 +175,14 @@ class NoiseGNN(MyGNN):
     """Noise-Asymmetric GNN with noise injection for symmetry breaking."""
     
     def __init__(self, in_channels, hidden_channels, out_channels, num_layers,
-                 dropout, lin_builder=None):
+                 dropout, lin_builder=None, mask_seed=None):
         super().__init__(in_channels, hidden_channels, out_channels, num_layers,
-                        dropout, nonlin='gelu', lin_builder=lin_builder, C_lst=None)
+                        dropout, nonlin='gelu', lin_builder=lin_builder, C_lst=None, mask_seed=mask_seed)
 
 
 # Convenience function for creating GNNs
 def create_gnn(symmetry, in_channels, hidden_channels, out_channels, num_layers,
-               dropout, mask_params=None, model_type=None):
+               dropout, mask_params=None, model_type=None, mask_seed=None):
     """Create GNN based on model type.
     
     Args:
@@ -318,21 +204,21 @@ def create_gnn(symmetry, in_channels, hidden_channels, out_channels, num_layers,
                     dropout, lin_builder=lin_builder)
     elif symmetry == 2:
         if model_type == 'asym_gelu_gnn':
-            lin_builder = nn.Linear
+            lin_builder = lambda in_dim, out_dim, mask_rng: nn.Linear(in_dim, out_dim)
             return AsymGeluGNN(in_channels, hidden_channels, out_channels, num_layers,
-                            dropout, C_lst, lin_builder=lin_builder)
+                            dropout, C_lst, lin_builder=lin_builder, mask_seed=mask_seed)
         else: # model_type == 'asym_swiglu_gnn'
-            lin_builder = nn.Linear
+            lin_builder = lambda in_dim, out_dim, mask_rng: nn.Linear(in_dim, out_dim)
             return AsymSwiGLUGNN(in_channels, hidden_channels, out_channels, num_layers,
-                                dropout, C_lst, lin_builder=lin_builder)
+                                dropout, C_lst, lin_builder=lin_builder, mask_seed=mask_seed)
     # for now: mask_params only uses default values
     elif symmetry == 1:
-        lin_builder = lambda in_dim, out_dim: SparseLinear(in_dim, out_dim, **mask_params.get('default', {}))
+        lin_builder = lambda in_dim, out_dim, mask_rng: SparseLinear(in_dim, out_dim, mask_rng=mask_rng, **mask_params.get('default', {}))
         return AsymWGNN(in_channels, hidden_channels, out_channels, num_layers,
-                       dropout, C_lst, lin_builder=lin_builder)
+                       dropout, C_lst, lin_builder=lin_builder, mask_seed=mask_seed)
     elif symmetry == 3:
-        lin_builder = lambda in_dim, out_dim: NoiseLinear(in_dim, out_dim, **mask_params.get('default', {}))
+        lin_builder = lambda in_dim, out_dim, mask_rng: NoiseLinear(in_dim, out_dim, mask_rng=mask_rng, **mask_params.get('default', {}))
         return NoiseGNN(in_channels, hidden_channels, out_channels, num_layers,
-                       dropout, lin_builder=lin_builder)
+                       dropout, lin_builder=lin_builder, mask_seed=mask_seed)
     else:
         raise ValueError(f"Invalid GNN symmetry type: {symmetry}")

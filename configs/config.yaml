@@ -10,12 +10,13 @@ defaults:
   - _self_
 
 # Multi-model experiment settings
-num_models: 1
+num_models: 2
 
 # Global settings
 seed: 42
 init_seed: null  # Controls parameter initialization
-opt_seed: null   # Controls optimizer state initialization (defaults to init_seed)
+mask_seed: null  # Controls parameter initialization
+optimization_seed: null   # Controls optimizer state initialization (defaults to init_seed)
 device: cuda
 output_dir: ./outputs
 experiment_name: ${now:%Y-%m-%d}/${now:%H-%M-%S}__${model.name}

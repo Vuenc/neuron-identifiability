@@ -3,6 +3,7 @@ MLP models with asymmetric architectures.
 Refactored from lmc/models/models_mlp.py
 """
 
+from typing import Dict
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -13,14 +14,12 @@ from .activation import setup_activation
 
 
 class AsymSwiGLU(nn.Module):
-    def __init__(self, dim, scale=1.0, mask_num=0, fixed_C=None):
+    def __init__(self, dim, mask_rng: torch.Generator, scale=1.0, mask_num=0, fixed_C=None):
         super().__init__()
         if fixed_C is not None:
             C = fixed_C
         else:
-            g = torch.Generator()
-            g.manual_seed(abs(hash(str(mask_num) + str(0))))
-            C = torch.randn(dim, dim, generator=g)
+            C = torch.randn(dim, dim, generator=mask_rng)
         self.register_buffer("C", C)
         self.mask_num = mask_num
     
@@ -30,20 +29,23 @@ class AsymSwiGLU(nn.Module):
 
 
 class SparseLinear(nn.Module):
-    def __init__(self, in_dim, out_dim, mask_constant=0, mask_type='random_subsets', 
-                 do_normal_mask=True, num_fixed=6, mask_num=0):
+    def __init__(self, in_dim, out_dim, mask_rng: torch.Generator, mask_constant=0, mask_type='random_subsets', 
+                 do_normal_mask=True, num_fixed=6, bias=True, mask_num=0):
         super().__init__()
 
-        mask = self._make_mask(in_dim, out_dim, mask_type, num_fixed, mask_num)
+        mask = self._make_mask(in_dim, out_dim, mask_type, num_fixed, mask_rng)
         self.register_buffer('mask', mask, persistent=True)
         
         self.weight = nn.Parameter(torch.empty(out_dim, in_dim))
-        self.bias = nn.Parameter(torch.empty(out_dim))
+        if bias:
+            self.bias = nn.Parameter(torch.empty(out_dim))
+        else:
+            self.register_parameter('bias', None)
         
         self.weight.register_hook(lambda grad: self.mask * grad)
         
         if do_normal_mask:
-            normal_mask = self._normal_mask(out_dim, in_dim, mask_num)
+            normal_mask = torch.randn(out_dim, in_dim, generator=mask_rng)
             self.register_buffer('normal_mask', normal_mask, persistent=True)
         else:
             self.register_buffer('normal_mask', torch.ones_like(mask), persistent=True)
@@ -52,33 +54,17 @@ class SparseLinear(nn.Module):
         self.mask_constant = mask_constant
         self.reset_parameters()
     
-    def _make_mask(self, in_dim, out_dim, mask_type, num_fixed, mask_num):
+    def _make_mask(self, in_dim, out_dim, mask_type, num_fixed, mask_rng: torch.Generator):
         if mask_type == 'random_subsets':
-            # Match the original implementation
             mask = torch.ones(out_dim, in_dim)
-            row_idx = 0
-            least_zeros = num_fixed
-            for nz in range(least_zeros, in_dim):
-                while True:
-                    zeros_in_row = self._get_subset(in_dim, row_idx, least_zeros, mask_num)
-                    mask[row_idx, zeros_in_row] = 0
-                    row_idx += 1
-                    if row_idx >= out_dim:
-                        return mask
-            raise ValueError('Error in making mask, possibly because out_dim is too large for these settings')
+            if num_fixed >= in_dim:
+                raise ValueError(f'Error in making mask: too many fixed parameters (num_fixed={num_fixed}, in_dim={in_dim})')
+            for row_idx in range(out_dim):
+                zeros_in_row = torch.randperm(in_dim, generator=mask_rng)[:num_fixed]
+                mask[row_idx, zeros_in_row] = 0
+            return mask
         else:
             raise ValueError('Invalid mask type')
-    
-    def _get_subset(self, num_cols, row_idx, num_sample, mask_num):
-        g = torch.Generator()
-        g.manual_seed(row_idx + abs(hash(str(mask_num))))
-        indices = torch.arange(num_cols)
-        return (indices[torch.randperm(num_cols, generator=g)[:num_sample]])
-    
-    def _normal_mask(self, out_dim, in_dim, mask_num):
-        g = torch.Generator()
-        g.manual_seed(abs(hash(str(mask_num))))
-        return torch.randn(out_dim, in_dim, generator=g)
     
     def reset_parameters(self):
         with torch.no_grad():
@@ -101,16 +87,14 @@ class SparseLinear(nn.Module):
 
 class NoiseLinear(nn.Module):
     """Linear layer with fixed Gaussian noise injection for symmetry breaking."""
-    def __init__(self, in_dim, out_dim, mask_num=0, mask_constant=1.0, **kwargs):
+    def __init__(self, in_dim, out_dim, mask_rng: torch.Generator, mask_num=0, mask_constant=1.0, **kwargs):
         super().__init__()
         
         self.weight = nn.Parameter(torch.empty(out_dim, in_dim))
         self.bias = nn.Parameter(torch.empty(out_dim))
         
         # Create fixed Gaussian noise similar to AsymSwiGLU's C initialization
-        g = torch.Generator()
-        g.manual_seed(abs(hash(str(mask_num) + str(0))))
-        noise = torch.randn(out_dim, in_dim, generator=g)
+        noise = torch.randn(out_dim, in_dim, generator=mask_rng)
         self.register_buffer('noise', noise, persistent=True)
         
         self.mask_num = mask_num
@@ -147,7 +131,7 @@ class MLP(nn.Module):
         self.norms = nn.ModuleList()
         
         # Handle normalization
-        self.norm_kind = norm
+        self.norm_type = norm
         self.norm = setup_normalization(norm, hidden_dim, elementwise_affine)
         
         # Handle activation
@@ -164,15 +148,13 @@ class MLP(nn.Module):
             self.lins.append(nn.Linear(hidden_dim, output_dim))
             
             # Add normalization layers
-            if self.norm_kind in ('layer', 'batch'):
+            if self.norm_type in ('layer', 'batch'):
                 for i in range(num_layers - 1):
                     self.norms.append(self.norm(hidden_dim))
-            elif self.norm_kind in ('layer_linear', 'batch_linear'):
+            elif self.norm_type in ('layer_linear', 'batch_linear'):
                 for i in range(num_layers - 1):
                     v = total_output_variances_init(self.lins[i], use_realized_F=True)
                     self.norms.append(self.norm(v))
-        
-        self.norm_type = norm
     
     def forward(self, x):
         x = x.view(x.size(0), -1)  # Flatten the input
@@ -191,8 +173,8 @@ class MLP(nn.Module):
 
 @register('model', 'mlp_w_asym')
 class WMLP(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim, num_layers, 
-                 mask_params=None, norm='layer', elementwise_affine=True, activation='gelu'):
+    def __init__(self, input_dim, hidden_dim, output_dim, num_layers,
+                 mask_params: Dict, norm='layer', elementwise_affine=True, activation='gelu', mask_seed=None):
         super().__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
@@ -204,7 +186,7 @@ class WMLP(nn.Module):
         self.norms = nn.ModuleList()
         
         # Handle normalization
-        self.norm_kind = norm
+        self.norm_type = norm
         self.norm = setup_normalization(norm, hidden_dim, elementwise_affine)
         
         # Handle activation
@@ -228,30 +210,32 @@ class WMLP(nn.Module):
             print(f"Mask params for linear{layer_idx}: {output}")
             return output
         
+        mask_rng = torch.Generator()
+        if mask_seed is not None:
+            mask_rng.manual_seed(mask_seed)
+
         if num_layers == 1:
             self.lins.append(SparseLinear(input_dim, output_dim, 
-                                        mask_num=0, **get_mask_params(0)))
+                                        mask_num=0, **get_mask_params(0), mask_rng=mask_rng))
         else:
             self.lins.append(SparseLinear(input_dim, hidden_dim, 
-                                        mask_num=0, **get_mask_params(0)))
+                                        mask_num=0, **get_mask_params(0), mask_rng=mask_rng))
             
             for i in range(num_layers - 2):
                 self.lins.append(SparseLinear(hidden_dim, hidden_dim, 
-                                            mask_num=i+1, **get_mask_params(i+1)))
+                                            mask_num=i+1, **get_mask_params(i+1), mask_rng=mask_rng))
             
             self.lins.append(SparseLinear(hidden_dim, output_dim, 
-                                        mask_num=num_layers-1, **get_mask_params(num_layers-1)))
+                                        mask_num=num_layers-1, **get_mask_params(num_layers-1), mask_rng=mask_rng))
             
             # Add normalization layers
-            if self.norm_kind in ('layer', 'batch'):
+            if self.norm_type in ('layer', 'batch'):
                 for i in range(num_layers - 1):
                     self.norms.append(self.norm(hidden_dim))
-            elif self.norm_kind in ('layer_linear', 'batch_linear'):
+            elif self.norm_type in ('layer_linear', 'batch_linear'):
                 for i in range(num_layers - 1):
                     v = total_output_variances_init(self.lins[i], use_realized_F=True)
                     self.norms.append(self.norm(v))
-        
-        self.norm_type = norm
     
     def forward(self, x):
         x = x.view(x.size(0), -1)  # Flatten the input
@@ -277,8 +261,8 @@ class WMLP(nn.Module):
 
 @register('model', 'mlp_noise_asym')
 class NoiseMLP(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim, num_layers, 
-                 mask_params=None, norm='layer', elementwise_affine=True, activation='gelu'):
+    def __init__(self, input_dim, hidden_dim, output_dim, num_layers,
+                 mask_params: Dict, norm='layer', elementwise_affine=True, activation='gelu', mask_seed=None):
         super().__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
@@ -290,7 +274,7 @@ class NoiseMLP(nn.Module):
         self.norms = nn.ModuleList()
         
         # Handle normalization
-        self.norm_kind = norm
+        self.norm_type = norm
         self.norm = setup_normalization(norm, hidden_dim, elementwise_affine)
         
         # Handle activation
@@ -307,31 +291,33 @@ class NoiseMLP(nn.Module):
                 output = default_params
             print(f"Mask params for linear{layer_idx}: {output}")
             return output
-        
+
+        mask_rng = torch.Generator()
+        if mask_seed is not None:
+            mask_rng.manual_seed(mask_seed)
+
         if num_layers == 1:
             first_layer_params = get_mask_params(0)
-            self.lins.append(NoiseLinear(input_dim, output_dim, mask_num=0, **first_layer_params))
+            self.lins.append(NoiseLinear(input_dim, output_dim, mask_num=0, **first_layer_params, mask_rng=mask_rng))
         else:
             first_layer_params = get_mask_params(0)
-            self.lins.append(NoiseLinear(input_dim, hidden_dim, mask_num=0, **first_layer_params))
+            self.lins.append(NoiseLinear(input_dim, hidden_dim, mask_num=0, **first_layer_params, mask_rng=mask_rng))
             
             for i in range(num_layers - 2):
                 hidden_layer_params = get_mask_params(i+1)
-                self.lins.append(NoiseLinear(hidden_dim, hidden_dim, mask_num=i+1, **hidden_layer_params))
+                self.lins.append(NoiseLinear(hidden_dim, hidden_dim, mask_num=i+1, **hidden_layer_params, mask_rng=mask_rng))
             
             output_layer_params = get_mask_params(num_layers-1)
-            self.lins.append(NoiseLinear(hidden_dim, output_dim, mask_num=num_layers-1, **output_layer_params))
+            self.lins.append(NoiseLinear(hidden_dim, output_dim, mask_num=num_layers-1, **output_layer_params, mask_rng=mask_rng))
             
             # Add normalization layers
-            if self.norm_kind in ('layer', 'batch'):
+            if self.norm_type in ('layer', 'batch'):
                 for i in range(num_layers - 1):
                     self.norms.append(self.norm(hidden_dim))
-            elif self.norm_kind in ('layer_linear', 'batch_linear'):
+            elif self.norm_type in ('layer_linear', 'batch_linear'):
                 for i in range(num_layers - 1):
                     v = total_output_variances_init(self.lins[i], use_realized_F=True)
                     self.norms.append(self.norm(v))
-        
-        self.norm_type = norm
     
     def forward(self, x):
         x = x.view(x.size(0), -1)  # Flatten the input
@@ -349,8 +335,8 @@ class NoiseMLP(nn.Module):
 
 @register('model', 'mlp_sigma_asym')
 class SigmaMLP(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim, num_layers, 
-                 norm='layer', asym_act=True):
+    def __init__(self, input_dim, hidden_dim, output_dim, num_layers,
+                 norm='layer', asym_act=True, mask_seed=None):
         super().__init__()
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
@@ -360,10 +346,14 @@ class SigmaMLP(nn.Module):
         self.lins = nn.ModuleList()
         self.activations = nn.ModuleList()
         self.norms = nn.ModuleList()
+    
+        mask_rng = torch.Generator()
+        if mask_seed is not None:
+            mask_rng.manual_seed(mask_seed)
         
         if asym_act:
             for i in range(num_layers - 1):
-                self.activations.append(AsymSwiGLU(hidden_dim, mask_num=i))
+                self.activations.append(AsymSwiGLU(hidden_dim, mask_num=i, mask_rng=mask_rng))
         else:
             for i in range(num_layers - 1):
                 self.activations.append(nn.GELU())
@@ -401,7 +391,7 @@ class SigmaMLP(nn.Module):
         return x
 
 
-def create_mlp(symmetry, input_dim, hidden_dim, output_dim, num_layers, 
+def create_mlp(symmetry, input_dim, hidden_dim, output_dim, num_layers, mask_seed=None,
                mask_params=None, norm='layer', elementwise_affine=True, activation=None):
     if symmetry == 0:
         activation = activation or 'relu'
@@ -412,12 +402,12 @@ def create_mlp(symmetry, input_dim, hidden_dim, output_dim, num_layers,
             raise ValueError("mask_params required for W-Asym MLP")
         activation = activation or 'gelu'
         return WMLP(input_dim, hidden_dim, output_dim, num_layers, mask_params, norm, 
-                   elementwise_affine, activation)
+                   elementwise_affine, activation, mask_seed=mask_seed)
     elif symmetry == 2:
-        return SigmaMLP(input_dim, hidden_dim, output_dim, num_layers, norm)
+        return SigmaMLP(input_dim, hidden_dim, output_dim, num_layers, norm, mask_seed=mask_seed)
     elif symmetry == 3:
         activation = activation or 'gelu'
-        return NoiseMLP(input_dim, hidden_dim, output_dim, num_layers, 
+        return NoiseMLP(input_dim, hidden_dim, output_dim, num_layers, mask_seed=mask_seed,
                        mask_params=mask_params, norm=norm, elementwise_affine=elementwise_affine, 
                        activation=activation)
     else:
