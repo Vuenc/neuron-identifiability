@@ -8,6 +8,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 import itertools
+import copy
+from omegaconf import OmegaConf
 from ..core.registry import register
 from .mlp import NoiseLinear, SparseLinear
 
@@ -502,8 +504,41 @@ def noise_resnet110(mask_params, **kwargs):
     return NoiseResNet(NoiseBasicBlock, [18, 18, 18], mask_params, **kwargs)
 
 
+def _apply_n_mul_to_mask_params(mask_params, n_mul, is_top_level=True):
+    """Recursively apply n_mul multiplier to all num_fixed values in mask_params.
+    
+    Args:
+        mask_params: Dictionary containing mask parameters (may be nested, may be OmegaConf DictConfig)
+        n_mul: Multiplier to apply to num_fixed values
+        is_top_level: Whether this is the top-level call (needed to convert OmegaConf only once)
+        
+    Returns:
+        New dictionary with num_fixed values multiplied by n_mul
+    """
+    # Convert OmegaConf DictConfig to regular dict if needed (only at top level)
+    if is_top_level:
+        try:
+            # Try to convert if it's an OmegaConf object
+            result = OmegaConf.to_container(mask_params, resolve=True)
+        except (AttributeError, TypeError, ValueError):
+            # If it's already a regular dict or not OmegaConf, just deepcopy
+            result = copy.deepcopy(mask_params)
+    else:
+        # For nested dicts, they should already be regular dicts after top-level conversion
+        result = copy.deepcopy(mask_params)
+    
+    if isinstance(result, dict):
+        for key, value in list(result.items()):  # Use list() to avoid mutation during iteration
+            if key == 'num_fixed' and isinstance(value, (int, float)):
+                result[key] = int(value * n_mul)
+            elif isinstance(value, dict):
+                result[key] = _apply_n_mul_to_mask_params(value, n_mul, is_top_level=False)
+    
+    return result
+
+
 # Convenience function for backward compatibility
-def create_resnet(symmetry, depth, w=1, mask_params=None, num_classes=10, mask_seed=None):
+def create_resnet(symmetry, depth, w=1, mask_params=None, num_classes=10, mask_seed=None, n_mul=1.0):
     """Create ResNet based on symmetry type and depth.
     
     Args:
@@ -512,7 +547,13 @@ def create_resnet(symmetry, depth, w=1, mask_params=None, num_classes=10, mask_s
         w: Width multiplier
         mask_params: Mask parameters for W-Asym and Noise-Asym
         num_classes: Number of output classes
+        n_mul: Multiplier for num_fixed values (useful for wider ResNets)
     """
+    # Apply n_mul to all num_fixed values in mask_params
+    if mask_params is not None and n_mul != 1.0:
+        print(f"Applying n_mul={n_mul} to mask_params")
+        mask_params = _apply_n_mul_to_mask_params(mask_params, n_mul)
+        print(f"After applying n_mul, sample values: {mask_params.get('conv_f', {}).get('num_fixed', 'N/A')}")
     if symmetry == 0:
         if depth == 20:
             return resnet20(w=w, num_classes=num_classes)

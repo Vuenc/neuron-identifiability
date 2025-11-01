@@ -77,6 +77,7 @@ def create_model(cfg: DictConfig, mask_seed, device=None):
             mask_params=cfg.model.mask_params if cfg.model.symmetry in [1, 3] else None,
             num_classes=cfg.model.num_classes,
             mask_seed=mask_seed,
+            n_mul=cfg.model.get('n_mul', 1.0),
         )
     elif cfg.model.name == 'gnn_arxiv':
         return create_gnn(
@@ -310,7 +311,6 @@ def train_multi(cfg: DictConfig, init_seeds: list, optimization_seeds: list, mas
     func_sim_enabled = (cfg.training.functional_similarity.enabled and 
                        num_models == 2 and 
                        cfg.training.functional_similarity.save_every is not None)
-
     if cossim_enabled and num_models == 2:
         print("Cossim enabled")
         cossim_analysis(cfg, output_dir)
@@ -341,80 +341,123 @@ def train_multi(cfg: DictConfig, init_seeds: list, optimization_seeds: list, mas
 
 def cossim_analysis(cfg: DictConfig, output_dir: Path):
     print("\nComputing cossim...")
+    import gc
     
-    model1_checkpoints = []
-    model2_checkpoints = []
-    
+    # First, collect the list of epochs that have checkpoints (without loading them)
+    available_epochs = []
     for epoch in range(0, cfg.training.num_epochs + 1):
         if cfg.training.save_every is None or epoch % cfg.training.save_every == 0:
-            try:
-                checkpoint1 = torch.load(output_dir / f"checkpoint_epoch_{epoch}_model_1.pt", map_location='cpu')
-                checkpoint2 = torch.load(output_dir / f"checkpoint_epoch_{epoch}_model_2.pt", map_location='cpu')
-                model1_checkpoints.append(checkpoint1)
-                model2_checkpoints.append(checkpoint2)
-            except FileNotFoundError:
-                print(f"Warning: Checkpoint epoch {epoch} not found")
-                break
+            checkpoint_path1 = output_dir / f"checkpoint_epoch_{epoch}_model_1.pt"
+            checkpoint_path2 = output_dir / f"checkpoint_epoch_{epoch}_model_2.pt"
+            if checkpoint_path1.exists() and checkpoint_path2.exists():
+                available_epochs.append(epoch)
+            else:
+                if epoch > 0:  # Allow missing epoch 0, but break if later epochs are missing
+                    break
     
-    if len(model1_checkpoints) > 0:
-        print(f"Found {len(model1_checkpoints)} checkpoints")
-        all_epoch_results = []
-        
-        for i, (checkpoint1, checkpoint2) in enumerate(zip(model1_checkpoints, model2_checkpoints)):
-            epoch = i + 1
-            
-            prev_checkpoint1 = model1_checkpoints[i-1]
-            prev_checkpoint2 = model2_checkpoints[i-1]
-            prev_params1 = prev_checkpoint1['model_state_dict']
-            prev_params2 = prev_checkpoint2['model_state_dict']
-            
-            current_params1 = checkpoint1['model_state_dict']
-            current_params2 = checkpoint2['model_state_dict']
-
-            updates1 = {}
-            updates2 = {}
-            for name in current_params1:
-                if name in prev_params1:
-                    updates1[name] = current_params1[name] - prev_params1[name]
-            for name in current_params2:
-                if name in prev_params2:
-                    updates2[name] = current_params2[name] - prev_params2[name]
-
-            per_layer_similarities = compute_cossim_per_layer(updates1, updates2, checkpoint1['trainable'])
-            aggregate_similarity = compute_cossim_aggregate(updates1, updates2, checkpoint1['trainable'])
-            
-            epoch_results = {
-                'epoch': epoch,
-                'per_layer_similarities': per_layer_similarities,
-                'aggregate_similarity': aggregate_similarity,
-            }
-            
-            all_epoch_results.append(epoch_results)
-
-            print(f"Epoch {epoch} cossim: {aggregate_similarity:.4f}")
-            print(f"Epoch {epoch} per layer: {per_layer_similarities}")
-            
-            if cfg.logging.get('use_wandb', False):
-                try:
-                    import wandb
-                    if wandb.run is not None:
-                        wandb.log({'cossim_aggregate': aggregate_similarity})
-
-                        for param_name, similarity in per_layer_similarities.items():
-                            wandb.log({
-                                f'cossim_{param_name}': similarity
-                            })
-                except ImportError:
-                    print("Warning: wandb not available")
-
-        torch.save({
-            'all_epoch_results': all_epoch_results,
-            'num_epochs': len(all_epoch_results)
-        }, output_dir / "cossim_all_epochs.pt")
-        
-        print(f"\nSaved cossim results to {output_dir}/cossim_all_epochs.pt")
-    else:
+    if len(available_epochs) == 0:
         print("Warning: No checkpoints found")
+        return
+    
+    print(f"Found {len(available_epochs)} checkpoints")
+    all_epoch_results = []
+    
+    # Use rolling window: only keep current and previous checkpoint in memory
+    prev_checkpoint1 = None
+    prev_checkpoint2 = None
+    
+    for i, epoch in enumerate(available_epochs):
+        # Load current checkpoints
+        try:
+            current_checkpoint1 = torch.load(
+                output_dir / f"checkpoint_epoch_{epoch}_model_1.pt", 
+                map_location='cpu'
+            )
+            current_checkpoint2 = torch.load(
+                output_dir / f"checkpoint_epoch_{epoch}_model_2.pt", 
+                map_location='cpu'
+            )
+        except FileNotFoundError:
+            print(f"Warning: Checkpoint epoch {epoch} not found, skipping")
+            continue
+        
+        # For first epoch (i=0, epoch=0), store as previous checkpoint for next iteration
+        # We'll compute epoch 0->1 comparison in the next iteration (i=1)
+        if i == 0:
+            prev_checkpoint1 = current_checkpoint1
+            prev_checkpoint2 = current_checkpoint2
+            # Clean up current references (they're now in prev_*)
+            current_checkpoint1 = None
+            current_checkpoint2 = None
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            continue  # Continue to next iteration where we'll compute epoch 0->1
+        
+        # Compute updates using current and previous checkpoints
+        prev_params1 = prev_checkpoint1['model_state_dict']
+        prev_params2 = prev_checkpoint2['model_state_dict']
+        
+        current_params1 = current_checkpoint1['model_state_dict']
+        current_params2 = current_checkpoint2['model_state_dict']
+
+        updates1 = {}
+        updates2 = {}
+        for name in current_params1:
+            if name in prev_params1:
+                updates1[name] = current_params1[name] - prev_params1[name]
+        for name in current_params2:
+            if name in prev_params2:
+                updates2[name] = current_params2[name] - prev_params2[name]
+
+        per_layer_similarities = compute_cossim_per_layer(updates1, updates2, current_checkpoint1['trainable'])
+        aggregate_similarity = compute_cossim_aggregate(updates1, updates2, current_checkpoint1['trainable'])
+        
+        epoch_results = {
+            'epoch': epoch,
+            'per_layer_similarities': per_layer_similarities,
+            'aggregate_similarity': aggregate_similarity,
+        }
+        
+        all_epoch_results.append(epoch_results)
+
+        print(f"Epoch {epoch} cossim: {aggregate_similarity:.4f}")
+        print(f"Epoch {epoch} per layer: {per_layer_similarities}")
+        
+        if cfg.logging.get('use_wandb', False):
+            try:
+                import wandb
+                if wandb.run is not None:
+                    wandb.log({'cossim_aggregate': aggregate_similarity})
+
+                    for param_name, similarity in per_layer_similarities.items():
+                        wandb.log({
+                            f'cossim_{param_name}': similarity
+                        })
+            except ImportError:
+                print("Warning: wandb not available")
+        
+        # Clear updates dictionaries (they may contain large tensors)
+        del updates1, updates2
+        del current_params1, current_params2, prev_params1, prev_params2
+        
+        # Move to next iteration: current becomes previous
+        prev_checkpoint1 = current_checkpoint1
+        prev_checkpoint2 = current_checkpoint2
+        current_checkpoint1 = None
+        current_checkpoint2 = None
+        
+        # Force garbage collection and clear GPU cache to free memory
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    torch.save({
+        'all_epoch_results': all_epoch_results,
+        'num_epochs': len(all_epoch_results)
+    }, output_dir / "cossim_all_epochs.pt")
+    
+    print(f"\nSaved cossim results to {output_dir}/cossim_all_epochs.pt")
 
 
 def functional_similarity_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, mask_seed: int):

@@ -140,12 +140,16 @@ def evaluate_model_comprehensive_batched(
                     output.view(output.shape[0] * output.shape[1], *output.shape[2:]),
                     target.repeat(output.shape[0]),
                     reduction='none')
-                loss = loss.reshape(*output.shape[:2]).mean(dim=1) # loss averaged over data batch, but kept separate over model params batch
+                # Sum losses over data batch (not mean), to correctly compute overall average later
+                # Shape after reshape: (num_interpolated_models, batch_size)
+                # Sum over dim=1 gives: (num_interpolated_models,) - sum of losses per batch per model
+                loss_sum = loss.reshape(*output.shape[:2]).sum(dim=1)
+                batch_size = target.size(0)
 
                 if total_loss is None:
-                    total_loss = loss
+                    total_loss = loss_sum
                 else:
-                    total_loss += loss
+                    total_loss += loss_sum
 
                 # Calculate accuracy
                 pred = output.argmax(dim=2)
@@ -154,11 +158,11 @@ def evaluate_model_comprehensive_batched(
                     correct_instances = correct
                 else:
                     correct_instances += correct
-                total_instances += target.size(0)
+                total_instances += batch_size
 
         assert total_loss is not None and correct_instances is not None
 
-        # results[f'{split_name}_loss'] = total_loss / len(loader) # TODO this is wrong, isn't it? -> maybe it was approximately not wrong with the CE reduction='mean'
+        # total_loss is the sum of all individual losses, so dividing by total_instances gives the correct mean loss
         results[f'{split_name}_loss'] = (total_loss / total_instances).tolist()
         results[f'{split_name}_accuracy'] = (100.0 * correct_instances / total_instances).tolist()
 

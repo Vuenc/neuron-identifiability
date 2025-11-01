@@ -8,17 +8,18 @@ model:
   # Model architecture
   symmetry: 0  # 0: Standard, 1: W-Asym
   depth: 20
-  w: 1
+  w: 8 # 8x width ResNet
   num_classes: 10
+  n_mul: 3.0 # Multiplier for num_fixed values (useful for wider ResNets)
 
   # Mask parameters for W-Asym and Noise-Asym
   mask_params:
     default:
-      mask_constant: 3.0
+      mask_constant: 2.0
       mask_type: random_subsets
       do_normal_mask: true
     conv_f:
-      num_fixed: 12
+      num_fixed: 4
     conv_1:
       conv:
         num_fixed: 36
