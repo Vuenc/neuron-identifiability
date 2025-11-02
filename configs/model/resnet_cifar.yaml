@@ -19,7 +19,7 @@ model:
       mask_type: random_subsets
       do_normal_mask: true
     conv_f:
-      num_fixed: 4
+      num_fixed: 4 # Warning: different from original implementation (but num_fixed=12 means first layer is fully fixed)
     conv_1:
       conv:
         num_fixed: 36

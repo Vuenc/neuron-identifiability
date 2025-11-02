@@ -95,14 +95,32 @@ class Trainer:
             print(f"Sparsity: 0.0%")
 
         print("\nModel structure:")
-        print("-" * 40)
+        print("-" * 110)
+        # Header
+        print(f"{'Module':30} | {'Total':>12} | {'Active':>12} | {'Masked':>12} | {'Sparsity':>10}")
+        print("-" * 110)
+        
         for name, module in self.model.named_modules():
             if len(list(module.children())) == 0:
                 param_count = sum(p.numel() for p in module.parameters())
                 if param_count > 0:
-                    print(f"{name:30} | {param_count:>8,} params")
+                    # Check if module has masking (for weights)
+                    if hasattr(module, 'mask') and module.mask is not None:
+                        # Count masked weight parameters (mask only applies to weights, not bias)
+                        masked_count = (1 - module.mask.int()).sum().item()
+                        # Total weight params = mask.numel(), total params includes bias
+                        weight_param_count = module.mask.numel()
+                        bias_param_count = param_count - weight_param_count
+                        active_weight_count = weight_param_count - masked_count
+                        active_count = active_weight_count + bias_param_count  # bias is always active
+                        # Sparsity is only for weights
+                        sparsity_pct = (masked_count / weight_param_count * 100) if weight_param_count > 0 else 0.0
+                        print(f"{name:30} | {param_count:>12,} | {active_count:>12,} | {masked_count:>12,} | {sparsity_pct:>9.1f}%")
+                    else:
+                        # No masking, all params are active - show 0 for masked, "-" for sparsity
+                        print(f"{name:30} | {param_count:>12,} | {param_count:>12,} | {0:>12,} | {'-':>10}")
         
-        print("="*60)
+        print("="*110)
         print()
     
     def _compute_mask_hash(self) -> str:
