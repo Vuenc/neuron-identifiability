@@ -3,23 +3,29 @@ Graph Neural Network models with asymmetric architectures.
 Refactored from gnn/main_arxiv.py
 """
 
-import math
-import itertools
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from ..core.registry import register
 from .mlp import NoiseLinear, SparseLinear
+from typing import TYPE_CHECKING
 
 # Global seed for mask generation (matching original)
 seed = 1
 
 # Optional imports for GNN functionality
-try:
-    from torch_geometric.nn import SimpleConv
-except ImportError:
-    print("Warning: torch_geometric not available. GNN functionality will be limited.")
-    SimpleConv = None
+def import_pyg() -> bool:
+    global torch_geometric
+    # Defer import because it costs several seconds and is often not needed
+    try:
+        import torch_geometric.nn
+        return True
+    except ImportError:
+        print("Warning: torch_geometric not available. GNN functionality will be limited.")
+        return False
+
+if TYPE_CHECKING: # satisfy the imports during static type checking, load dynamically at runtime
+    import torch_geometric
 
 def make_C_lst(hidden_channels, num_layers):
     import math
@@ -69,11 +75,11 @@ class MyConv(nn.Module):
             nonlin_module = AsymSwiGLU(C)
         else:
             raise ValueError(f"Invalid nonlinearity: {nonlin}")
-        
-        if SimpleConv is not None:
-            self.conv = SimpleConv(aggr='mean', combine_root='sum')
-        else:
+
+        if not import_pyg():
             raise ImportError("torch_geometric is required for GNN functionality")
+        self.conv = torch_geometric.nn.SimpleConv(aggr='mean', combine_root='sum')
+
         self.mlp = nn.Sequential(
             lin_builder(in_dim, out_dim, mask_rng), 
             nn.BatchNorm1d(out_dim), 

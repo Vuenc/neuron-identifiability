@@ -3,15 +3,11 @@ ResNet models with asymmetric architectures.
 Refactored from lmc/models/models_resnet.py
 """
 
-from webbrowser import get
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
 import itertools
-import random
-import numpy as np
-from omegaconf import OmegaConf
 from ..core.registry import register
 from .mlp import NoiseLinear, SparseLinear
 

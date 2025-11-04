@@ -1,28 +1,56 @@
 from typing import List, Tuple
 import torch
 from torch.utils.data import DataLoader, random_split
-import torchvision
 from ..core.registry import register
 
-# Optional imports for GNN functionality
-try:
-    import torch_geometric.transforms as T
-    from ogb.nodeproppred import PygNodePropPredDataset
-except ImportError:
-    print("Warning: torch_geometric or ogb not available. GNN functionality will be limited.")
-    T = None
-    PygNodePropPredDataset = None
+from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    import torchvision
 
-# Optional imports for FFCV functionality
-try:
+# Optional imports for torchvision functionality
+def import_torchvision() -> bool:
+    # Defer import because it costs several seconds and is sometimes not needed
+    global torchvision
+    import torchvision
+    return True
+
+if TYPE_CHECKING: # satisfy the imports during static type checking, load dynamically at runtime
     import ffcv
     import ffcv.fields.decoders
     import ffcv.pipeline.operation
     import ffcv.transforms
-except ImportError:
-    print("Warning: FFCV not installed, FFCV dataloaders will not be available.")
-    ffcv = None
+
+# Optional imports for FFCV functionality
+def import_ffcv() -> bool:
+    global ffcv
+    # Defer import because it costs several seconds and is often not needed
+    try:
+        import ffcv
+        import ffcv.fields.decoders
+        import ffcv.pipeline.operation
+        import ffcv.transforms
+        return True
+    except ImportError:
+        print("Warning: FFCV not installed, FFCV dataloaders will not be available.")
+        return False
+
+if TYPE_CHECKING: # satisfy the imports during static type checking, load dynamically at runtime
+    import torch_geometric.transforms
+    import ogb.nodeproppred
+
+# Optional imports for GNN functionality
+def import_ogb_pyg() -> bool:
+    global torch_geometric
+    global ogb
+    # Defer import because it costs several seconds and is often not needed
+    try:
+        import torch_geometric.transforms
+        import ogb.nodeproppred
+        return True
+    except ImportError:
+        print("Warning: torch_geometric or ogb not available. GNN functionality will be limited.")
+        return False
 
 
 # Mean values for the datasets are computed on the training set (train_dataset, _, _ = create_train_val_test_split(train_val_dataset, val_split=0.1, test_split=0.0, seed=42))
@@ -36,6 +64,7 @@ MNIST_STD = (0.3081)
 
 @register('dataset', 'mnist')
 def create_mnist_dataset(data_dir='./data', train=True, transform=None):
+    assert import_torchvision()
     if transform is None:
         transform = torchvision.transforms.Compose([
             torchvision.transforms.ToTensor(),
@@ -47,6 +76,7 @@ def create_mnist_dataset(data_dir='./data', train=True, transform=None):
 
 @register('dataset', 'cifar10')
 def create_cifar10_dataset(data_dir='./data', train=True, transform=None):
+    assert import_torchvision()
     if transform is None:
         if train:
             transform = torchvision.transforms.Compose([
@@ -65,7 +95,8 @@ def create_cifar10_dataset(data_dir='./data', train=True, transform=None):
 
 
 def create_ffcv_dataloader_cifar(data_path, mean: Tuple[float, float, float], std: Tuple[float, float, float], train=True, batch_size=32, device="cuda:0", num_workers=-1):
-    assert ffcv # type: ignore
+    assert import_ffcv() # ffcv needs to be lazily loaded (expensive import, often not needed)
+    import numpy as np
     mean_u8: Tuple[int, int, int] = tuple([x * 255 for x in mean]) # type: ignore
     std_u8: Tuple[int, int, int] = tuple(([x * 255 for x in std])) # type: ignore
     label_pipeline: List[ffcv.pipeline.operation.Operation] = [ffcv.fields.decoders.IntDecoder(), ffcv.transforms.ToTensor(), ffcv.transforms.ToDevice(torch.device(device)), ffcv.transforms.Squeeze()]
@@ -79,8 +110,7 @@ def create_ffcv_dataloader_cifar(data_path, mean: Tuple[float, float, float], st
         ffcv.transforms.ToTensor(),
         ffcv.transforms.ToDevice(torch.device(device), non_blocking=True),
         ffcv.transforms.ToTorchImage(),
-        ffcv.transforms.Convert(torch.float32),
-        torchvision.transforms.Normalize(mean=mean_u8, std=std_u8) # type: ignore
+        ffcv.transforms.NormalizeImage(mean=np.array(mean_u8), std=np.array(std_u8), type=np.float32)
     ])
 
     ordering = ffcv.loader.OrderOption.RANDOM if train else ffcv.loader.OrderOption.SEQUENTIAL
@@ -119,13 +149,13 @@ def create_cifar100_dataset(data_dir='./data', train=True, transform=None):
 
 @register('dataset', 'arxiv')
 def create_arxiv_dataset(data_dir='./data'):
-    if PygNodePropPredDataset is None or T is None:
+    if not import_ogb_pyg():
         raise ImportError("torch_geometric and ogb are required for ArXiv dataset")
     
-    dataset = PygNodePropPredDataset(
+    dataset = ogb.nodeproppred.PygNodePropPredDataset(
         name='ogbn-arxiv', 
         root=data_dir,
-        transform=T.Compose([T.ToUndirected(), T.ToSparseTensor()])
+        transform=torch_geometric.transforms.Compose([torch_geometric.transforms.ToUndirected(), torch_geometric.transforms.ToSparseTensor()])
     )
     return dataset
 

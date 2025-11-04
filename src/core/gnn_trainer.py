@@ -1,7 +1,6 @@
 import torch
 import torch.nn.functional as F
 from .trainer import Trainer
-from ogb.nodeproppred import Evaluator
 
 
 class GNNTrainer(Trainer):
@@ -12,7 +11,8 @@ class GNNTrainer(Trainer):
         super().__init__(model, data, optimizer, scheduler, device,
                         model_prefix=model_prefix, shared_wandb=shared_wandb, 
                         logging=logging, print_summary=print_summary)
-        
+
+        from ogb.nodeproppred import Evaluator # Lazy import (expensive and often not needed)
         self.data = data['data']
         self.split_idx = data['split_idx']
         self.evaluator = evaluator or Evaluator(name='ogbn-arxiv')
