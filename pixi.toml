@@ -29,6 +29,7 @@ highcharts-stock = ">=1.7.0, <2"
 
 [feature.gnn.dependencies]
 ogb = ">=1.3.6,<2"
+pytorch_geometric = ">=2.7.0,<3"
 
 [feature.ffcv.dependencies]
 matplotlib = ">=3.10.5,<4"
