@@ -1,8 +1,12 @@
-# @package dataset
-name: cifar10
-data_dir: ./data
-batch_size: 128
-val_split: 0.1
-num_workers: 4
-pin_memory: true
-enable_ffcv: true
+# @package _global_
+model:
+  num_classes: 10
+
+dataset:  
+  name: cifar10
+  data_dir: ./data
+  batch_size: 128
+  val_split: 0.1
+  num_workers: 4
+  pin_memory: true
+  enable_ffcv: true
