@@ -1,35 +1,38 @@
-# @package model
-_target_: src.models.resnet.create_resnet
-name: resnet_cifar
+# @package _global_
+max_parallel_processes: 4
 
-# Model architecture
-symmetry: 0  # 0: Standard, 1: W-Asym
-depth: 20
-w: 1
-num_classes: 10
+model:
+  _target_: src.models.resnet.create_resnet
+  name: resnet_cifar
 
-# Mask parameters for W-Asym and Noise-Asym
-mask_params:
-  default:
-    mask_constant: 3.0
-    mask_type: random_subsets
-    do_normal_mask: true
-  conv_f:
-    num_fixed: 12
-  conv_1:
-    conv:
-      num_fixed: 36
-    skip:
-      num_fixed: 4
-  conv_2:
-    conv:
-      num_fixed: 54
-    skip:
-      num_fixed: 6
-  conv_3:
-    conv:
-      num_fixed: 72
-    skip:
+  # Model architecture
+  symmetry: 0  # 0: Standard, 1: W-Asym
+  depth: 20
+  w: 1
+  num_classes: 10
+
+  # Mask parameters for W-Asym and Noise-Asym
+  mask_params:
+    default:
+      mask_constant: 3.0
+      mask_type: random_subsets
+      do_normal_mask: true
+    conv_f:
+      num_fixed: 12
+    conv_1:
+      conv:
+        num_fixed: 36
+      skip:
+        num_fixed: 4
+    conv_2:
+      conv:
+        num_fixed: 54
+      skip:
+        num_fixed: 6
+    conv_3:
+      conv:
+        num_fixed: 72
+      skip:
+        num_fixed: 8
+    linear:
       num_fixed: 8
-  linear:
-    num_fixed: 8

@@ -1,22 +1,25 @@
-# @package model
-_target_: src.models.gnn.create_gnn
-name: gnn_arxiv
+# @package _global_
+max_parallel_processes: 1
 
-# Model architecture
-symmetry: 0  # 0: Standard, 1: W-Asym, 2: Sigma-Asym, 3: Noise-Asym
-model_type:  # asym_gelu_gnn or asym_swiglu_gnn for symmetry 2
-in_channels: 128  # Will be set based on dataset
-hidden_channels: 256
-out_channels: 40  # Will be set based on dataset
-num_layers: 3
-dropout: 0.0
+model:
+  _target_: src.models.gnn.create_gnn
+  name: gnn_arxiv
 
-# For asymmetric models
-C_lst: null  # Will be generated if needed
+  # Model architecture
+  symmetry: 0  # 0: Standard, 1: W-Asym, 2: Sigma-Asym, 3: Noise-Asym
+  model_type:  # asym_gelu_gnn or asym_swiglu_gnn for symmetry 2
+  in_channels: 128  # Will be set based on dataset
+  hidden_channels: 256
+  out_channels: 40  # Will be set based on dataset
+  num_layers: 3
+  dropout: 0.0
 
-mask_params:
-  default:
-    mask_constant: 0.5
-    mask_type: random_subsets
-    do_normal_mask: true
-    num_fixed: 6
+  # For asymmetric models
+  C_lst: null  # Will be generated if needed
+
+  mask_params:
+    default:
+      mask_constant: 0.5
+      mask_type: random_subsets
+      do_normal_mask: true
+      num_fixed: 6
