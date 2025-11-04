@@ -53,7 +53,7 @@ def set_seed(seed):
     torch.backends.cudnn.benchmark = False
 
 
-def create_model(cfg: DictConfig, device=None):
+def create_model(cfg: DictConfig, mask_seed, device=None):
     if cfg.model.name == 'mlp_mnist':
         return create_mlp(
             symmetry=cfg.model.symmetry,
@@ -65,7 +65,7 @@ def create_model(cfg: DictConfig, device=None):
             norm=cfg.model.norm,
             elementwise_affine=cfg.model.get('elementwise_affine', True),
             activation=cfg.model.get('activation', None),
-            mask_seed=cfg.mask_seed,
+            mask_seed=mask_seed,
         )
     elif cfg.model.name == 'resnet_cifar':
         return create_resnet(
@@ -74,7 +74,7 @@ def create_model(cfg: DictConfig, device=None):
             w=cfg.model.w,
             mask_params=cfg.model.mask_params if cfg.model.symmetry in [1, 3] else None,
             num_classes=cfg.model.num_classes,
-            mask_seed=cfg.mask_seed,
+            mask_seed=mask_seed,
         )
     elif cfg.model.name == 'gnn_arxiv':
         return create_gnn(
@@ -86,7 +86,7 @@ def create_model(cfg: DictConfig, device=None):
             dropout=cfg.model.dropout,
             mask_params=cfg.model.mask_params if cfg.model.symmetry in [1, 3] else None,
             model_type=cfg.model.model_type,
-            mask_seed=cfg.mask_seed,
+            mask_seed=mask_seed,
         )
     else:
         raise ValueError(f"Unknown model: {cfg.model.name}")
@@ -221,7 +221,7 @@ def setup_wandb(cfg: DictConfig):
         return None
 
 
-def train_multi(cfg: DictConfig, init_seeds: list, optimization_seeds: list):
+def train_multi(cfg: DictConfig, init_seeds: list, optimization_seeds: list, mask_seed: int):
     num_models = cfg.get('num_models', 1)
     print(f"Multi-model: {num_models} models")
     
@@ -256,7 +256,7 @@ def train_multi(cfg: DictConfig, init_seeds: list, optimization_seeds: list):
         set_seed(model_init_seed)
         print(f"Init seed: {model_init_seed}")
         
-        model = create_model(cfg, device=cfg.device)
+        model = create_model(cfg, mask_seed, device=cfg.device)
         
         # Set optimizer seed before creating optimizer
         model_optimization_seed = optimization_seeds[model_idx % len(optimization_seeds)]
@@ -299,13 +299,13 @@ def train_multi(cfg: DictConfig, init_seeds: list, optimization_seeds: list):
         cossim_analysis(cfg, output_dir)
     
     if func_sim_enabled and num_models == 2:
-        functional_similarity_analysis(cfg, output_dir, data_info)
+        functional_similarity_analysis(cfg, output_dir, data_info, mask_seed=mask_seed)
     
     if cfg.interpolation.enabled and num_models >= 2:
         save_every = cfg.interpolation.get('save_every')
         epochs_to_save = [None] if save_every is None else range(0, cfg.training.num_epochs + 1, save_every)
         for epoch in epochs_to_save:
-            interpolation_analysis(cfg, output_dir, data_info, epoch=epoch)
+            interpolation_analysis(cfg, output_dir, data_info, epoch=epoch, mask_seed=mask_seed)
     
     if wandb:
         try:
@@ -396,7 +396,7 @@ def cossim_analysis(cfg: DictConfig, output_dir: Path):
         print("Warning: No checkpoints found")
 
 
-def functional_similarity_analysis(cfg: DictConfig, output_dir: Path, data_info: dict):
+def functional_similarity_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, mask_seed: int):
     """Perform functional similarity analysis between two models."""
     print("\nComputing functional similarity...")
     
@@ -428,8 +428,8 @@ def functional_similarity_analysis(cfg: DictConfig, output_dir: Path, data_info:
         all_epoch_results = []
         
         # Create models for evaluation
-        model1 = create_model(cfg, device='cpu')
-        model2 = create_model(cfg, device='cpu')
+        model1 = create_model(cfg, mask_seed, device='cpu')
+        model2 = create_model(cfg, mask_seed, device='cpu')
         
         for i, (checkpoint1, checkpoint2) in enumerate(zip(model1_checkpoints, model2_checkpoints)):
             epoch = i  # Now includes epoch 0
@@ -508,7 +508,7 @@ def functional_similarity_analysis(cfg: DictConfig, output_dir: Path, data_info:
         print("Warning: No checkpoints found")
 
 
-def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, epoch: int | None = None):
+def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, mask_seed: int, epoch: int | None = None):
     """Perform LMC interpolation analysis for a specific epoch or final models."""
     num_models = cfg.get('num_models', 1)
     interpolation_type = cfg.interpolation.type
@@ -518,7 +518,7 @@ def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, e
         return None
 
     def create_model_for_interpolation():
-        return create_model(cfg, device=cfg.device)
+        return create_model(cfg, mask_seed=mask_seed, device=cfg.device)
 
     target_epoch = epoch if epoch is not None else cfg.training.num_epochs
 
@@ -671,11 +671,11 @@ def main(cfg: DictConfig) -> None:
     
     init_seeds_raw = cfg.get('init_seed', None)
     if init_seeds_raw is None:
-        init_seeds = list(range(cfg.num_models))
+        init_seeds = [random.randint(0, 2**32 - 1) for _ in range(cfg.num_models)]
     elif hasattr(init_seeds_raw, '__iter__'):
         init_seeds = [int(x) for x in init_seeds_raw]
     else:
-        init_seeds = [int(init_seeds_raw)]
+        init_seeds = [int(init_seeds_raw)] * cfg.num_models
     
     optimization_seeds_raw = cfg.get('optimization_seed', None)
     if optimization_seeds_raw is None:
@@ -684,11 +684,21 @@ def main(cfg: DictConfig) -> None:
     elif hasattr(optimization_seeds_raw, '__iter__'):
         optimization_seeds = [int(x) for x in optimization_seeds_raw]
     else:
-        optimization_seeds = [int(optimization_seeds_raw)]
+        optimization_seeds = [int(optimization_seeds_raw)] * cfg.num_models
+
+    if len(optimization_seeds) != cfg.num_models:
+        raise ValueError(f"Invalid optimization_seed: {len(optimization_seeds)} values specified, expected either one value or num_models={cfg.num_models} values.")
+    if len(init_seeds) != cfg.num_models:
+        raise ValueError(f"Invalid init_seed: {len(init_seeds)} values specified, expected either one value or num_models={cfg.num_models} values.")
+
+    mask_seed = cfg.mask_seed
+    if mask_seed is None:
+        mask_seed = random.randint(0, 2**32 - 1)
     
     print(f"Global seed: {cfg.seed}")
     print(f"Init seed(s): {init_seeds}")
     print(f"Opt seed(s): {optimization_seeds}")
+    print(f"Mask seed: {mask_seed}")
     
     print(f"Starting: {cfg.experiment_name}")
     
@@ -702,7 +712,7 @@ def main(cfg: DictConfig) -> None:
     else:
         print(f"Multi-model training: {num_models} models")
     
-    train_multi(cfg, init_seeds, optimization_seeds)
+    train_multi(cfg, init_seeds, optimization_seeds, mask_seed=mask_seed)
     print(f"Completed.")
 
 
