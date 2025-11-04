@@ -3,6 +3,8 @@
 Main training script using Hydra configuration management.
 """
 
+from __future__ import annotations
+import concurrent.futures
 import hydra
 from omegaconf import DictConfig, OmegaConf
 import torch
@@ -92,7 +94,7 @@ def create_model(cfg: DictConfig, mask_seed, device=None):
         raise ValueError(f"Unknown model: {cfg.model.name}")
 
 
-def setup_data(cfg: DictConfig):
+def setup_data_loaders(cfg: DictConfig):
     if cfg.dataset.enable_ffcv:
         # Check if FFCV is actually available
         try:
@@ -147,7 +149,7 @@ def setup_data(cfg: DictConfig):
         )[0:2]
         train_loader = create_dataloader(
             train_dataset, 
-            batch_size=cfg.dataset.batch_size, 
+            batch_size=cfg.dataset.batch_size,
             shuffle=True,
             num_workers=cfg.dataset.num_workers,
             pin_memory=cfg.dataset.pin_memory
@@ -221,9 +223,63 @@ def setup_wandb(cfg: DictConfig):
         return None
 
 
+def train_one(cfg: DictConfig, output_dir: Path, init_seed: int, optimization_seed: int, mask_seed: int, model_index: int, runs_in_separate_process: bool=True):
+    if runs_in_separate_process:
+        global print
+        _print = __builtins__.print
+        def print_with_model_id(*args, **kwargs):
+            _print(f"[Model {model_index+1}]:", *args, **kwargs)
+        print = print_with_model_id
+
+    num_models = cfg.get('num_models', 1)
+
+    print(f"=== Model {model_index + 1}/{num_models} ===")
+
+    set_seed(init_seed)
+    print(f"Init seed: {init_seed}")
+
+    model = create_model(cfg, mask_seed, device=cfg.device)
+
+    # Set optimizer seed before creating optimizer
+    set_seed(optimization_seed)
+    print(f"Opt seed: {optimization_seed}")
+    data_info = setup_data_loaders(cfg)
+
+    optimizer = create_optimizer(cfg.optimizer.name, model, **cfg.optimizer)
+    scheduler = create_scheduler(cfg.scheduler.name, optimizer, **cfg.scheduler) if cfg.scheduler.name != 'none' else None
+
+    trainer_class = GNNTrainer if cfg.model.name == 'gnn_arxiv' else Trainer
+    trainer = trainer_class(
+        model=model,
+        data=data_info,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        device=cfg.device,
+        model_prefix=f'model_{model_index + 1}',
+        shared_wandb=True,
+        logging=cfg.logging,
+        print_summary=(model_index == 0)
+    )
+
+    save_grad_every = getattr(cfg, 'save_grad_every', cfg.training.save_grad_every)
+    save_params_every = getattr(cfg, 'save_params_every', cfg.training.save_params_every)
+
+    results = trainer.train(
+        num_epochs=cfg.training.num_epochs,
+        val_every=cfg.training.val_every,
+        save_every=cfg.training.save_every,
+        save_path=str(output_dir) if cfg.training.save_path is None else cfg.training.save_path,
+        early_stopping=None,
+        save_grad_every=save_grad_every,
+        save_params_every=save_params_every,
+        model_idx=model_index
+    )
+    return results
+
+
 def train_multi(cfg: DictConfig, init_seeds: list, optimization_seeds: list, mask_seed: int):
     num_models = cfg.get('num_models', 1)
-    print(f"Multi-model: {num_models} models")
+    print(f"Training {num_models} models")
     
     wandb = setup_wandb(cfg)
     
@@ -232,88 +288,53 @@ def train_multi(cfg: DictConfig, init_seeds: list, optimization_seeds: list, mas
     with open(output_dir / "config.yaml", "w") as f:
         OmegaConf.save(cfg, f)
     print(f"Output dir: {output_dir}")
-    
-    data_info = setup_data(cfg)
-    
+
+    # Training (in parallel)
+    max_parallel_processes = min(num_models, cfg.max_parallel_processes)
+    if max_parallel_processes > 1:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=max_parallel_processes) as executor:
+            model_results = list(executor.map(
+                train_one,
+                *zip(*[(cfg, output_dir, init_seeds[model_index], optimization_seeds[model_index], mask_seed, model_index) for model_index in range(num_models)])
+            ))
+    else:
+        model_results = list(map(
+                train_one,
+                *zip(*[(cfg, output_dir, init_seeds[model_index], optimization_seeds[model_index], mask_seed, model_index) for model_index in range(num_models)])
+            ))
+
     cossim_enabled = (cfg.training.cosine_similarity.enabled and 
                      num_models == 2 and 
                      cfg.training.cosine_similarity.save_every is not None)
-    if cossim_enabled:
-        print("Cossim enabled")
-    
+
     func_sim_enabled = (cfg.training.functional_similarity.enabled and 
                        num_models == 2 and 
                        cfg.training.functional_similarity.save_every is not None)
-    if func_sim_enabled:
-        print("Funcsim enabled")
-    
-    model_results = []
-    
-    for model_idx in range(num_models):
-        print(f"\n=== Model {model_idx + 1}/{num_models} ===")
-        
-        model_init_seed = init_seeds[model_idx % len(init_seeds)]
-        set_seed(model_init_seed)
-        print(f"Init seed: {model_init_seed}")
-        
-        model = create_model(cfg, mask_seed, device=cfg.device)
-        
-        # Set optimizer seed before creating optimizer
-        model_optimization_seed = optimization_seeds[model_idx % len(optimization_seeds)]
-        set_seed(model_optimization_seed)
-        print(f"Opt seed: {model_optimization_seed}")
-        
-        optimizer = create_optimizer(cfg.optimizer.name, model, **cfg.optimizer)
-        scheduler = create_scheduler(cfg.scheduler.name, optimizer, **cfg.scheduler) if cfg.scheduler.name != 'none' else None
-        
-        trainer_class = GNNTrainer if cfg.model.name == 'gnn_arxiv' else Trainer
-        trainer = trainer_class(
-            model=model,
-            data=data_info,
-            optimizer=optimizer,
-            scheduler=scheduler,
-            device=cfg.device,
-            model_prefix=f'model_{model_idx + 1}',
-            shared_wandb=True,
-            logging=cfg.logging,
-            print_summary=(model_idx == 0)
-        )
-        
-        save_grad_every = getattr(cfg, 'save_grad_every', cfg.training.save_grad_every)
-        save_params_every = getattr(cfg, 'save_params_every', cfg.training.save_params_every)
-        
-        results = trainer.train(
-            num_epochs=cfg.training.num_epochs,
-            val_every=cfg.training.val_every,
-            save_every=cfg.training.save_every,
-            save_path=str(output_dir) if cfg.training.save_path is None else cfg.training.save_path,
-            early_stopping=None,
-            save_grad_every=save_grad_every,
-            save_params_every=save_params_every,
-            model_idx=model_idx
-        )
-        
-        model_results.append(results)
-    
+
     if cossim_enabled and num_models == 2:
+        print("Cossim enabled")
         cossim_analysis(cfg, output_dir)
-    
+
+    data_info = None
     if func_sim_enabled and num_models == 2:
+        data_info = data_info or setup_data_loaders(cfg)
+        print("Funcsim enabled")
         functional_similarity_analysis(cfg, output_dir, data_info, mask_seed=mask_seed)
-    
+
     if cfg.interpolation.enabled and num_models >= 2:
+        data_info = data_info or setup_data_loaders(cfg)
         save_every = cfg.interpolation.get('save_every')
         epochs_to_save = [None] if save_every is None else range(0, cfg.training.num_epochs + 1, save_every)
         for epoch in epochs_to_save:
             interpolation_analysis(cfg, output_dir, data_info, epoch=epoch, mask_seed=mask_seed)
-    
+
     if wandb:
         try:
             wandb.finish()
             print("Finished wandb")
         except ImportError:
             print("Warning: wandb not available")
-    
+
     print(f"\nMulti-model completed. Results saved to {output_dir}")
     return model_results
 
@@ -522,6 +543,7 @@ def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, m
 
     target_epoch = epoch if epoch is not None else cfg.training.num_epochs
 
+    interpolation_results = None
     if interpolation_type == 'grid':
         print(f"Grid interpolation between all pairs of models{(f' at epoch {epoch}'    ) if epoch is not None else ''}...")
 
@@ -661,6 +683,7 @@ def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, m
             except ImportError:
                 print("Warning: wandb not available")
     
+    assert interpolation_results is not None
     if epoch is None:
         save_interpolation_results(interpolation_results, output_dir)
     
@@ -708,12 +731,8 @@ def main(cfg: DictConfig) -> None:
     num_models = cfg.get('num_models', 1)
     cfg.num_models = num_models
     
-    if num_models == 1:
-        print("Single model training")
-        if cfg.interpolation.enabled:
+    if num_models == 1 and cfg.interpolation.enabled:
             print("Warning: LMC needs 2+ models. Skipping LMC.")
-    else:
-        print(f"Multi-model training: {num_models} models")
     
     train_multi(cfg, init_seeds, optimization_seeds, mask_seed=mask_seed)
     print(f"Completed.")

@@ -20,6 +20,7 @@ optimization_seed: null   # Controls optimizer state initialization (defaults to
 device: cuda
 output_dir: ./outputs
 experiment_name: ${now:%Y-%m-%d}/${now:%H-%M-%S}__${model.name}
+max_parallel_processes: 10
 
 # Hydra configuration
 hydra:
