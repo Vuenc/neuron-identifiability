@@ -143,7 +143,7 @@ def setup_data(cfg: DictConfig):
         train_dataset = create_dataset(cfg.dataset.name, cfg.dataset.data_dir, train=True)
         test_dataset = create_dataset(cfg.dataset.name, cfg.dataset.data_dir, train=False)
         train_dataset, val_dataset = create_train_val_test_split(
-            train_dataset, val_split=cfg.dataset.val_split, test_split=0.0, seed=cfg.seed
+            train_dataset, val_split=cfg.dataset.val_split, test_split=0.0, seed=42
         )[0:2]
         train_loader = create_dataloader(
             train_dataset, 
@@ -668,6 +668,9 @@ def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, m
 
 @hydra.main(version_base=None, config_path="configs", config_name="config")
 def main(cfg: DictConfig) -> None:
+    # Global seed (determines init_seed and optimization_seed if these are unset)
+    if cfg.get('seed', None) is not None:
+        set_seed(cfg.seed)
     
     init_seeds_raw = cfg.get('init_seed', None)
     if init_seeds_raw is None:

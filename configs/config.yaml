@@ -13,7 +13,7 @@ defaults:
 num_models: 2
 
 # Global settings
-seed: 42
+seed: null
 init_seed: null  # Controls parameter initialization
 mask_seed: null  # Controls parameter initialization
 optimization_seed: null   # Controls optimizer state initialization (defaults to init_seed)
