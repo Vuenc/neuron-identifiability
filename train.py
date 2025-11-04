@@ -528,6 +528,7 @@ def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, e
         interpolation_table = None
         PER_STEP_METRICS_KEYS = ['train_accuracy', 'val_accuracy', 'train_loss', 'val_loss', 'test_accuracy', 'test_loss']
         SPLITS = ["train", "val", "test"]
+        interpolation_results = {}
         try:
             import wandb
             if wandb.run is not None:
@@ -546,7 +547,7 @@ def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, e
                 # We could reuse the model object, but recreate it to be on the safe side
                 model = create_model_for_interpolation().to(cfg.device)
                 if cfg.model.name == 'gnn_arxiv':
-                    interpolation_results = interpolate_gnn_models(
+                    interpolation_results_pair = interpolate_gnn_models(
                         model, model1_state['model_state_dict'], model2_state['model_state_dict'],
                         data_info['data'], data_info['split_idx'],
                         steps=cfg.interpolation.steps,
@@ -554,21 +555,22 @@ def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, e
                         rewarm=True,
                     )
                 else:
-                    interpolation_results = interpolate_models(
+                    interpolation_results_pair = interpolate_models(
                         model, model1_state['model_state_dict'], model2_state['model_state_dict'],
                         data_info['train_loader'], data_info['val_loader'], data_info['test_loader'],
                         steps=cfg.interpolation.steps,
                         device=cfg.device,
                     )
+                interpolation_results[(model1_index, model2_index)] = interpolation_results_pair
 
                 print(f"Grid interpolation{(f' at epoch {epoch}'    ) if epoch is not None else ''} (model {model1_index} vs. model {model2_index}) completed!")
                 # Print summary
-                print(f'  Model distance: {interpolation_results["distance"]:.4f}')
-                print(f'  Normalized distance: {interpolation_results["normalized_distance"]:.6f}')
-                print(f"  Best accuracy (train/val/test): {'/'.join([f'{max(interpolation_results[f'{split}_accuracy']):.2f}%' for split in SPLITS])}")
-                print(f"  Worst accuracy (train/val/test): {'/'.join([f'{min(interpolation_results[f'{split}_accuracy']):.2f}%' for split in SPLITS])}")
-                print(f"  Barrier height (train/val/test): {'/'.join([f'{interpolation_results[f'{split}_barrier_height']:.2f}%' for split in SPLITS])}")
-                print(f"  Linearity: (train/val/test): {'/'.join([f'{interpolation_results[f'{split}_linearity']}' for split in SPLITS])}")
+                print(f'  Model distance: {interpolation_results_pair["distance"]:.4f}')
+                print(f'  Normalized distance: {interpolation_results_pair["normalized_distance"]:.6f}')
+                print(f"  Best accuracy (train/val/test): {'/'.join([f'{max(interpolation_results_pair[f'{split}_accuracy']):.2f}%' for split in SPLITS])}")
+                print(f"  Worst accuracy (train/val/test): {'/'.join([f'{min(interpolation_results_pair[f'{split}_accuracy']):.2f}%' for split in SPLITS])}")
+                print(f"  Barrier height (train/val/test): {'/'.join([f'{interpolation_results_pair[f'{split}_barrier_height']:.2f}%' for split in SPLITS])}")
+                print(f"  Linearity: (train/val/test): {'/'.join([f'{interpolation_results_pair[f'{split}_linearity']}' for split in SPLITS])}")
 
                 if cfg.logging.get('use_wandb', False):
                     try:
@@ -576,12 +578,12 @@ def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, e
                         if wandb.run is not None:
                             # Log the metrics that are computed per interpolation step
                             assert interpolation_table is not None
-                            for i, interpolation_factor in enumerate(interpolation_results["lambdas"]):
+                            for i, interpolation_factor in enumerate(interpolation_results_pair["lambdas"]):
                                 wandb.log({
                                     'interpolation_lambda': interpolation_factor,
                                     'model1_index': model1_index, 'model2_index': model2_index,
                                     'epoch': epoch, # can be None
-                                    **{f'interpolation_{key}': interpolation_results[key][i] if key in interpolation_results else float('nan') for key in PER_STEP_METRICS_KEYS}
+                                    **{f'interpolation_{key}': interpolation_results_pair[key][i] if key in interpolation_results_pair else float('nan') for key in PER_STEP_METRICS_KEYS}
                                 })
                                 interpolation_table.add_data(
                                     interpolation_factor, model1_index, model2_index, f"{model1_index}_{model2_index}",
@@ -591,11 +593,11 @@ def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, e
                             wandb.log({
                                 'interpolation_type': 'grid',
                                 'model1_index': model1_index, 'model2_index': model2_index,
-                                **{f'interpolation_best_{split}_accuracy': max(interpolation_results[f'{split}_accuracy']) for split in SPLITS},
-                                **{f'interpolation_worst_{split}_accuracy': min(interpolation_results[f'{split}_accuracy']) for split in SPLITS},
+                                **{f'interpolation_best_{split}_accuracy': max(interpolation_results_pair[f'{split}_accuracy']) for split in SPLITS},
+                                **{f'interpolation_worst_{split}_accuracy': min(interpolation_results_pair[f'{split}_accuracy']) for split in SPLITS},
                                 'epoch': epoch, # can be None
-                                **{f'interpolation_{split}_barrier_height': interpolation_results[f'{split}_barrier_height'] for split in SPLITS},
-                                'distance': interpolation_results['distance']
+                                **{f'interpolation_{split}_barrier_height': interpolation_results_pair[f'{split}_barrier_height'] for split in SPLITS},
+                                'distance': interpolation_results_pair['distance']
                             })
                     except ImportError:
                         print("Warning: wandb not available")
