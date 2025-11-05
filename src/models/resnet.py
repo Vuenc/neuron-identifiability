@@ -320,9 +320,7 @@ class WResNet(nn.Module):
                                      stride=2, mask_params=get_mask_params('conv_3'), mask_rng=mask_rng)
         mask_num += num_blocks[2] * 3
 
-        self.linear = SparseLinear(
-            64*w, num_classes, mask_rng=mask_rng,
-            mask_num=mask_num, bias=False, **get_mask_params('linear'))
+        self.linear = SparseLinear(64*w, num_classes, mask_rng=mask_rng, mask_num=mask_num, bias=True, **get_mask_params('linear'))
         self.apply(_weights_init)
 
     def _make_layer(self, block, mask_num, planes, num_blocks, stride, mask_params, mask_rng: torch.Generator):
@@ -537,8 +535,160 @@ def _apply_n_mul_to_mask_params(mask_params, n_mul, is_top_level=True):
     return result
 
 
+def _initialize_from_asym_resnet(symmetry, depth, w, mask_params, num_classes, n_mul):
+    """Initialize a symmetry type 0 (standard) ResNet with weights from symmetry type 1 or 3 (W-Asym or Noise-Asym).
+    
+    This creates an asym model using create_resnet, runs it through forward to extract effective weights,
+    then copies them into a standard model.
+    
+    Args:
+        symmetry: 1=W-Asym, 3=Noise-Asym
+        depth: ResNet depth (20, 32, 56, 110)
+        w: Width multiplier
+        mask_params: Mask parameters for asym model (used for initialization)
+        num_classes: Number of output classes
+        n_mul: Multiplier for num_fixed values
+        
+    Returns:
+        Standard ResNet with weights initialized from asym model
+    """
+    # Create asym model using the normal create_resnet function
+    asym_model = create_resnet(symmetry=symmetry, depth=depth, w=w, mask_params=mask_params, 
+                               num_classes=num_classes, n_mul=n_mul, asym_init_only=False)
+    
+    # Create standard model
+    standard_model = create_resnet(symmetry=0, depth=depth, w=w, mask_params=None, 
+                                  num_classes=num_classes, n_mul=n_mul, asym_init_only=False)
+    
+    # Extract effective weights - handle W-Asym and Noise-Asym differently
+    standard_state = standard_model.state_dict()
+    
+    if symmetry == 1:
+        # W-Asym: weight.data is already modified by reset_parameters(), need to capture what forward() actually uses
+        # Hook into F.conv2d and F.linear to capture effective weights, tracking by module name
+        captured_weights = {}
+        active_module = [None]
+        original_conv2d = F.conv2d
+        original_linear = F.linear
+        
+        def conv2d_hook(input, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
+            if active_module[0] is not None:
+                module_name = active_module[0]
+                weight_name = module_name + '.weight' if module_name else 'weight'
+                if weight_name not in captured_weights:
+                    captured_weights[weight_name] = weight.detach().clone()
+            return original_conv2d(input, weight, bias, stride, padding, dilation, groups)
+        
+        def linear_hook(input, weight, bias=None):
+            if active_module[0] is not None:
+                module_name = active_module[0]
+                weight_name = module_name + '.weight' if module_name else 'weight'
+                if weight_name not in captured_weights:
+                    captured_weights[weight_name] = weight.detach().clone()
+            return original_linear(input, weight, bias)
+        
+        F.conv2d = conv2d_hook
+        F.linear = linear_hook
+        
+        # Register pre-hooks on all sparse modules
+        hooks = []
+        for asym_name, asym_module in asym_model.named_modules():
+            if hasattr(asym_module, 'mask') and hasattr(asym_module, 'weight'):
+                hook = asym_module.register_forward_pre_hook(
+                    lambda module, input, name=asym_name: active_module.__setitem__(0, name),
+                    with_kwargs=False
+                )
+                hooks.append(hook)
+        
+        try:
+            asym_model.eval()
+            dummy_input = torch.randn(1, 3, 32, 32)
+            with torch.no_grad():
+                _ = asym_model(dummy_input)
+        finally:
+            F.conv2d = original_conv2d
+            F.linear = original_linear
+            for hook in hooks:
+                hook.remove()
+        
+        # Copy captured effective weights
+        for weight_name, effective_weight in captured_weights.items():
+            if weight_name in standard_state:
+                standard_state[weight_name].data.copy_(effective_weight)
+    
+    else:  # symmetry == 3 (Noise-Asym)
+        # Noise-Asym: weight.data contains actual weights, just add noise directly
+        for asym_name, asym_module in asym_model.named_modules():
+            if hasattr(asym_module, 'noise') and hasattr(asym_module, 'mask_constant') and hasattr(asym_module, 'weight'):
+                # Compute effective weight: weight + noise * mask_constant
+                effective_weight = asym_module.weight.data + asym_module.mask_constant * asym_module.noise
+                weight_name = asym_name + '.weight' if asym_name else 'weight'
+                if weight_name in standard_state:
+                    standard_state[weight_name].data.copy_(effective_weight)
+    
+    # Copy biases and other parameters (that aren't part of asym layers)
+    asym_modules_dict = dict(asym_model.named_modules())
+    for asym_name, asym_param in asym_model.named_parameters():
+        # Skip weights of asym layers (we already copied effective weights)
+        module_path = asym_name.rsplit('.', 1)[0]
+        if module_path in asym_modules_dict:
+            module = asym_modules_dict[module_path]
+            if hasattr(module, 'mask') or hasattr(module, 'noise'):
+                # This is an asym layer - skip raw parameters, we already copied effective weights
+                if '.weight' in asym_name:
+                    continue  # Already handled via captured_weights
+        
+        # Copy other parameters (biases, normalization params, etc.)
+        if asym_name in standard_state:
+            standard_state[asym_name].data.copy_(asym_param.data)
+    
+    # Copy buffers (normalization, etc.)
+    for asym_name, asym_buffer in asym_model.named_buffers():
+        if 'mask' not in asym_name and 'noise' not in asym_name and 'normal_mask' not in asym_name:
+            if asym_name in standard_state:
+                standard_state[asym_name].data.copy_(asym_buffer.data)
+    
+    standard_model.load_state_dict(standard_state)
+    
+    # Verify that both models implement the same function at initialization
+    asym_model.eval()
+    standard_model.eval()
+    
+    # Create a small batch of random inputs (CIFAR format: batch_size x 3 x 32 x 32)
+    batch_size = 4
+    test_input = torch.randn(batch_size, 3, 32, 32)
+    
+    with torch.no_grad():
+        asym_output = asym_model(test_input)
+        standard_output = standard_model(test_input)
+    
+    # Check if outputs match
+    max_diff = (asym_output - standard_output).abs().max().item()
+    mean_diff = (asym_output - standard_output).abs().mean().item()
+    max_rel_diff = ((asym_output - standard_output).abs() / (asym_output.abs() + 1e-8)).max().item()
+    
+    sym_type_name = "W-Asym" if symmetry == 1 else "Noise-Asym"
+    print(f"Initialized standard ResNet-{depth} from {sym_type_name} model")
+    print(f"Function equivalence check:")
+    print(f"  Max absolute difference: {max_diff:.2e}")
+    print(f"  Mean absolute difference: {mean_diff:.2e}")
+    print(f"  Max relative difference: {max_rel_diff:.2e}")
+    
+    # Check if they're close enough (within numerical precision)
+    tolerance = 1e-5
+    if max_diff < tolerance:
+        print(f"Models implement the same function (difference < {tolerance})")
+    else:
+        print(f"ERROR: Models differ by more than {tolerance}")
+        print(f"    Max absolute difference: {max_diff:.2e}")
+        print(f"    This indicates an issue with weight copying.")
+        raise ValueError(f"Failed to achieve exact equivalence. Models differ by {max_diff:.2e} (tolerance: {tolerance})")
+    
+    return standard_model
+
+
 # Convenience function for backward compatibility
-def create_resnet(symmetry, depth, w=1, mask_params=None, num_classes=10, mask_seed=None, n_mul=1.0):
+def create_resnet(symmetry, depth, w=1, mask_params=None, num_classes=10, mask_seed=None, n_mul=1.0, asym_init_only=False):
     """Create ResNet based on symmetry type and depth.
     
     Args:
@@ -548,12 +698,18 @@ def create_resnet(symmetry, depth, w=1, mask_params=None, num_classes=10, mask_s
         mask_params: Mask parameters for W-Asym and Noise-Asym
         num_classes: Number of output classes
         n_mul: Multiplier for num_fixed values (useful for wider ResNets)
+        asym_init_only: If True and symmetry in [1, 3], initialize standard model with weights from asym model
     """
+    # Handle asym_init_only: use asym model only for initialization, create standard model
+    if asym_init_only and symmetry in [1, 3]:
+        return _initialize_from_asym_resnet(symmetry, depth, w, mask_params, num_classes, n_mul)
+    
     # Apply n_mul to all num_fixed values in mask_params
     if mask_params is not None and n_mul != 1.0:
         print(f"Applying n_mul={n_mul} to mask_params")
         mask_params = _apply_n_mul_to_mask_params(mask_params, n_mul)
         print(f"After applying n_mul, sample values: {mask_params.get('conv_f', {}).get('num_fixed', 'N/A')}")
+    
     if symmetry == 0:
         if depth == 20:
             return resnet20(w=w, num_classes=num_classes)

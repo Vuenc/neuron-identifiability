@@ -21,3 +21,14 @@ functional_similarity:
   enabled: false  # Enable functional similarity computation between model predictions
   save_every: 1   # Compute functional similarity every N epochs (1 = every epoch)
   splits: ['train', 'val', 'test']  # Which data splits to evaluate on
+
+# NTK tracking analysis
+ntk_tracking:
+  enabled: false  # Enable NTK tracking over training epochs
+  save_every: 1   # Compute NTK every N epochs (1 = every epoch)
+  num_samples: 100  # Number of data points to use for NTK computation
+  class_balanced: true  # Whether to use class-balanced sampling
+  split: 'train'  # Which data split to use ('train', 'val', 'test')
+  save_matrix: false  # Whether to save the full NTK matrix (can be large)
+  compute_ntk_stats: false  # Whether to compute NTK statistics and comparisons (matrix-based metrics)
+  compute_linearization: false  # Whether to compute linearization agreement (f_theta vs linearized)

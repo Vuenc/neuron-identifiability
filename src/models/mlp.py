@@ -391,8 +391,174 @@ class SigmaMLP(nn.Module):
         return x
 
 
+def _initialize_from_asym_mlp(symmetry, input_dim, hidden_dim, output_dim, num_layers,
+                              mask_params, norm, elementwise_affine, activation, mask_seed: int | None):
+    """Initialize a symmetry type 0 (standard) MLP with weights from symmetry type 1 or 3 (W-Asym or Noise-Asym).
+    
+    This creates an asym model using create_mlp, runs it through forward to extract effective weights,
+    then copies them into a standard model.
+    
+    Args:
+        symmetry: 1=W-Asym, 3=Noise-Asym
+        input_dim: Input dimension
+        hidden_dim: Hidden dimension
+        output_dim: Output dimension
+        num_layers: Number of layers
+        mask_params: Mask parameters for asym model
+        norm: Normalization type
+        elementwise_affine: Whether normalization has learnable affine parameters
+        activation: Activation function
+        
+    Returns:
+        Standard MLP with weights initialized from asym model
+    """
+    # Create asym model using the normal create_mlp function
+    asym_model = create_mlp(symmetry=symmetry, input_dim=input_dim, hidden_dim=hidden_dim, 
+                           output_dim=output_dim, num_layers=num_layers, mask_params=mask_params,
+                           norm=norm, elementwise_affine=elementwise_affine, activation=activation,
+                           asym_init_only=False, mask_seed=mask_seed)
+    
+    # Create standard model
+    standard_model = create_mlp(symmetry=0, input_dim=input_dim, hidden_dim=hidden_dim,
+                               output_dim=output_dim, num_layers=num_layers, mask_params=None,
+                               norm=norm, elementwise_affine=elementwise_affine, activation=activation,
+                               asym_init_only=False, mask_seed=mask_seed)
+    
+    # Extract effective weights - handle W-Asym and Noise-Asym differently
+    standard_state = standard_model.state_dict()
+    
+    if symmetry == 1:
+        # W-Asym: weight.data is already modified by reset_parameters(), need to capture what forward() actually uses
+        # Hook into F.linear to capture effective weights, tracking by module name
+        captured_weights = {}
+        active_module = [None]
+        original_linear = F.linear
+        
+        def linear_hook(input, weight, bias=None):
+            if active_module[0] is not None:
+                module_name = active_module[0]
+                weight_name = module_name + '.weight' if module_name else 'weight'
+                if weight_name not in captured_weights:
+                    captured_weights[weight_name] = weight.detach().clone()
+            return original_linear(input, weight, bias)
+        
+        F.linear = linear_hook
+        
+        # Register pre-hooks on all sparse modules
+        hooks = []
+        for asym_name, asym_module in asym_model.named_modules():
+            if hasattr(asym_module, 'mask') and hasattr(asym_module, 'weight'):
+                hook = asym_module.register_forward_pre_hook(
+                    lambda module, input, name=asym_name: active_module.__setitem__(0, name),
+                    with_kwargs=False
+                )
+                hooks.append(hook)
+        
+        try:
+            asym_model.eval()
+            dummy_input = torch.randn(1, input_dim)
+            with torch.no_grad():
+                _ = asym_model(dummy_input)
+        finally:
+            F.linear = original_linear
+            for hook in hooks:
+                hook.remove()
+        
+        # Copy captured effective weights
+        for weight_name, effective_weight in captured_weights.items():
+            if weight_name in standard_state:
+                standard_state[weight_name].data.copy_(effective_weight)
+    
+    else:  # symmetry == 3 (Noise-Asym)
+        # Noise-Asym: weight.data contains actual weights, just add noise directly
+        for asym_name, asym_module in asym_model.named_modules():
+            if hasattr(asym_module, 'noise') and hasattr(asym_module, 'mask_constant') and hasattr(asym_module, 'weight'):
+                # Compute effective weight: weight + noise * mask_constant
+                effective_weight = asym_module.weight.data + asym_module.mask_constant * asym_module.noise
+                weight_name = asym_name + '.weight' if asym_name else 'weight'
+                if weight_name in standard_state:
+                    standard_state[weight_name].data.copy_(effective_weight)
+    
+    # Copy biases and other parameters (that aren't part of asym layers)
+    asym_modules_dict = dict(asym_model.named_modules())
+    for asym_name, asym_param in asym_model.named_parameters():
+        # Skip weights of asym layers (we already copied effective weights)
+        module_path = asym_name.rsplit('.', 1)[0]
+        if module_path in asym_modules_dict:
+            module = asym_modules_dict[module_path]
+            if hasattr(module, 'mask') or hasattr(module, 'noise'):
+                # This is an asym layer - skip raw parameters, we already copied effective weights
+                if '.weight' in asym_name:
+                    continue  # Already handled via captured_weights
+        
+        # Copy other parameters (biases, normalization params, etc.)
+        if asym_name in standard_state:
+            standard_state[asym_name].data.copy_(asym_param.data)
+    
+    # Copy buffers (normalization, etc.)
+    for asym_name, asym_buffer in asym_model.named_buffers():
+        if 'mask' not in asym_name and 'noise' not in asym_name and 'normal_mask' not in asym_name:
+            if asym_name in standard_state:
+                standard_state[asym_name].data.copy_(asym_buffer.data)
+    
+    standard_model.load_state_dict(standard_state)
+    
+    # Verify that both models implement the same function at initialization
+    asym_model.eval()
+    standard_model.eval()
+    
+    # Create a small batch of random inputs
+    batch_size = 4
+    test_input = torch.randn(batch_size, input_dim)
+    
+    with torch.no_grad():
+        asym_output = asym_model(test_input)
+        standard_output = standard_model(test_input)
+    
+    # Check if outputs match
+    max_diff = (asym_output - standard_output).abs().max().item()
+    mean_diff = (asym_output - standard_output).abs().mean().item()
+    max_rel_diff = ((asym_output - standard_output).abs() / (asym_output.abs() + 1e-8)).max().item()
+    
+    sym_type_name = "W-Asym" if symmetry == 1 else "Noise-Asym"
+    print(f"Initialized standard MLP from {sym_type_name} model")
+    print(f"Function equivalence check:")
+    print(f"  Max absolute difference: {max_diff:.2e}")
+    print(f"  Mean absolute difference: {mean_diff:.2e}")
+    print(f"  Max relative difference: {max_rel_diff:.2e}")
+    
+    # Check if they're close enough (within numerical precision)
+    tolerance = 1e-5
+    if max_diff < tolerance:
+        print(f"  ✓ Models implement the same function (difference < {tolerance})")
+    else:
+        print(f"  ⚠ Warning: Models differ by more than {tolerance}")
+        print(f"    This may indicate an issue with weight copying.")
+    
+    return standard_model
+
+
 def create_mlp(symmetry, input_dim, hidden_dim, output_dim, num_layers, mask_seed=None,
-               mask_params=None, norm='layer', elementwise_affine=True, activation=None):
+               mask_params=None, norm='layer', elementwise_affine=True, activation=None, asym_init_only=False):
+    """Create MLP based on symmetry type.
+    
+    Args:
+        symmetry: 0=Standard, 1=W-Asym, 2=Sigma-Asym, 3=Noise-Asym
+        input_dim: Input dimension
+        hidden_dim: Hidden dimension
+        output_dim: Output dimension
+        num_layers: Number of layers
+        mask_params: Mask parameters for asym models
+        norm: Normalization type
+        elementwise_affine: Whether normalization has learnable affine parameters
+        activation: Activation function
+        asym_init_only: If True and symmetry in [1, 3], initialize standard model with weights from asym model
+    """
+    # Handle asym_init_only: use asym model only for initialization, create standard model
+    if asym_init_only and symmetry in [1, 3]:
+        return _initialize_from_asym_mlp(symmetry, input_dim, hidden_dim, output_dim, num_layers,
+                                       mask_params, norm, elementwise_affine, activation, mask_seed=mask_seed)
+    
     if symmetry == 0:
         activation = activation or 'relu'
         return MLP(input_dim, hidden_dim, output_dim, num_layers, norm, 

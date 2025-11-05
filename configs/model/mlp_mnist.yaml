@@ -14,6 +14,7 @@ model:
   activation: gelu
 
   symmetry: 1  # 0: Standard, 1: W-Asym, 2: Sigma-Asym
+  asym_init_only: false  # If true and symmetry in [1, 3], initialize standard model with weights from asym model (only for initialization)
   mask_params:
     default:
       mask_constant: 1.0

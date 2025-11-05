@@ -44,6 +44,14 @@ from src.utils.functional_similarity import (
     compute_functional_similarity_gnn,
     compute_functional_similarity_aggregate,
 )
+from src.utils.ntk import (
+    compute_ntk_from_dataloader,
+    compute_ntk_gnn,
+    compute_ntk_stats,
+    compute_cka,
+    compute_linearization_agreement,
+    sample_data_points,
+)
 
 
 def set_seed(seed):
@@ -63,21 +71,23 @@ def create_model(cfg: DictConfig, mask_seed, device=None):
             hidden_dim=cfg.model.hidden_dim,
             output_dim=cfg.model.output_dim,
             num_layers=cfg.model.num_layers,
-            mask_params=cfg.model.mask_params if cfg.model.symmetry in [1, 3] else None,
+            mask_params=cfg.model.mask_params if cfg.model.symmetry in [1, 3] or cfg.model.get('asym_init_only', False) else None,
             norm=cfg.model.norm,
             elementwise_affine=cfg.model.get('elementwise_affine', True),
             activation=cfg.model.get('activation', None),
             mask_seed=mask_seed,
+            asym_init_only=cfg.model.get('asym_init_only', False),
         )
     elif cfg.model.name == 'resnet_cifar':
         return create_resnet(
             symmetry=cfg.model.symmetry,
             depth=cfg.model.depth,
             w=cfg.model.w,
-            mask_params=cfg.model.mask_params if cfg.model.symmetry in [1, 3] else None,
+            mask_params=cfg.model.mask_params if cfg.model.symmetry in [1, 3] or cfg.model.get('asym_init_only', False) else None,
             num_classes=cfg.model.num_classes,
             mask_seed=mask_seed,
             n_mul=cfg.model.get('n_mul', 1.0),
+            asym_init_only=cfg.model.get('asym_init_only', False),
         )
     elif cfg.model.name == 'gnn_arxiv':
         return create_gnn(
@@ -311,6 +321,9 @@ def train_multi(cfg: DictConfig, init_seeds: list, optimization_seeds: list, mas
     func_sim_enabled = (cfg.training.functional_similarity.enabled and 
                        num_models == 2 and 
                        cfg.training.functional_similarity.save_every is not None)
+    ntk_enabled = (cfg.training.get('ntk_tracking', {}).get('enabled', False) and
+                   cfg.training.get('ntk_tracking', {}).get('save_every') is not None)
+
     if cossim_enabled and num_models == 2:
         print("Cossim enabled")
         cossim_analysis(cfg, output_dir)
@@ -320,6 +333,11 @@ def train_multi(cfg: DictConfig, init_seeds: list, optimization_seeds: list, mas
         data_info = data_info or setup_data_loaders(cfg)
         print("Funcsim enabled")
         functional_similarity_analysis(cfg, output_dir, data_info, mask_seed=mask_seed)
+
+    if ntk_enabled:
+        data_info = data_info or setup_data_loaders(cfg)
+        print("NTK tracking enabled")
+        ntk_tracking_analysis(cfg, output_dir, data_info)
 
     if cfg.interpolation.enabled and num_models >= 2:
         data_info = data_info or setup_data_loaders(cfg)
@@ -591,6 +609,446 @@ def functional_similarity_analysis(cfg: DictConfig, output_dir: Path, data_info:
     print(f"\nSaved functional similarity results to {output_dir}/funcsim_all_epochs.pt")
 
 
+def ntk_tracking_analysis(cfg: DictConfig, output_dir: Path, data_info: dict):
+    """Perform NTK tracking analysis by computing NTK matrix at different epochs and tracking changes."""
+    print("\nComputing NTK tracking...")
+    import gc
+    import numpy as np
+    
+    ntk_config = cfg.training.get('ntk_tracking', {})
+    num_samples = ntk_config.get('num_samples', 100)
+    class_balanced = ntk_config.get('class_balanced', True)
+    split = ntk_config.get('split', 'train')
+    compute_ntk_stats = ntk_config.get('compute_ntk_stats', True)
+    compute_linearization = ntk_config.get('compute_linearization', True)
+    
+    # First, collect the list of epochs that have checkpoints (without loading them)
+    num_models = cfg.get('num_models', 1)
+    available_epochs = []
+    for epoch in range(0, cfg.training.num_epochs + 1):
+        if cfg.training.save_every is None or epoch % cfg.training.save_every == 0:
+            # Check if checkpoint exists (use model 1 for single model, or check all models)
+            checkpoint_exists = True
+            for model_idx in range(1, num_models + 1):
+                checkpoint_path = output_dir / f"checkpoint_epoch_{epoch}_model_{model_idx}.pt"
+                if not checkpoint_path.exists():
+                    checkpoint_exists = False
+                    break
+            
+            if checkpoint_exists:
+                available_epochs.append(epoch)
+            else:
+                if epoch > 0:  # Allow missing epoch 0, but break if later epochs are missing
+                    break
+    
+    if len(available_epochs) == 0:
+        print("Warning: No checkpoints found")
+        return
+    
+    print(f"Found {len(available_epochs)} checkpoints")
+    all_epoch_results = []
+    
+    # Determine device for models
+    if cfg.model.name == 'gnn_arxiv':
+        device = data_info['data'].x.device
+    else:
+        device = cfg.device
+    
+    # Get data loader for the specified split (prepare once for reuse)
+    if cfg.model.name == 'gnn_arxiv':
+        # For GNN, we'll use split indices
+        if split not in data_info.get('split_idx', {}):
+            print(f"Warning: Split '{split}' not found in split_idx, using 'train'")
+            split = 'train'
+        # Prepare indices once (will reuse same indices across epochs)
+        split_idx = data_info['split_idx'][split]
+        if len(split_idx) == 0:
+            print(f"Warning: Split '{split}' has no indices")
+            return
+        
+        # Sample indices if needed
+        if num_samples < len(split_idx):
+            labels = data_info['data'].y[split_idx].cpu()
+            unique_classes = torch.unique(labels).tolist()
+            
+            from collections import defaultdict
+            indices_by_class = defaultdict(list)
+            for i, label in enumerate(labels):
+                indices_by_class[label.item()].append(i)
+            
+            samples_per_class = num_samples // len(unique_classes)
+            remainder = num_samples % len(unique_classes)
+            
+            generator = torch.Generator()
+            generator.manual_seed(42)
+            
+            selected_local_indices = []
+            for i, class_idx in enumerate(unique_classes):
+                class_indices = indices_by_class[class_idx]
+                num_class_samples = samples_per_class + (1 if i < remainder else 0)
+                num_class_samples = min(num_class_samples, len(class_indices))
+                
+                perm = torch.randperm(len(class_indices), generator=generator)
+                selected_class_indices = [class_indices[perm[j].item()] for j in range(num_class_samples)]
+                selected_local_indices.extend(selected_class_indices)
+            
+            perm = torch.randperm(len(selected_local_indices), generator=generator)
+            selected_local_indices = [selected_local_indices[perm[i].item()] for i in range(len(selected_local_indices))]
+            
+            fixed_indices = split_idx[selected_local_indices[:num_samples]]
+        else:
+            fixed_indices = split_idx
+    else:
+        # For standard models, use data loaders
+        split_key = f'{split}_loader' if f'{split}_loader' in data_info else 'train_loader'
+        if split_key not in data_info or data_info[split_key] is None:
+            print(f"Warning: Split '{split}' loader not found, using 'train' loader")
+            split_key = 'train_loader'
+        data_loader = data_info[split_key]
+    
+    # Store initialization NTK (epoch 0) for comparison
+    init_ntk_matrix = None
+    
+    # For NTK tracking, we typically use model 1 (or just one model)
+    model_idx = 1
+    
+    # First, compute and store initialization NTK (epoch 0)
+    if 0 not in available_epochs:
+        print("Warning: Initialization checkpoint (epoch 0) not found, cannot compare to initialization")
+        return
+    
+    try:
+        init_checkpoint = torch.load(
+            output_dir / f"checkpoint_epoch_0_model_{model_idx}.pt", 
+            map_location='cpu'
+        )
+        
+        init_model = create_model(cfg, device='cpu')
+        init_model.load_state_dict(init_checkpoint['model_state_dict'])
+        init_model = init_model.to(device)
+        
+        # Store init model state dict on CPU for linearization agreement (if needed)
+        init_model_state_dict = None
+        selected_data = None
+        init_ntk_matrix = None
+        
+        if compute_linearization:
+            init_model_state_dict = init_checkpoint['model_state_dict'].copy()
+        
+        # Compute initialization NTK and get selected data points (if needed)
+        if compute_ntk_stats:
+            if cfg.model.name == 'gnn_arxiv':
+                init_ntk_matrix, _ = compute_ntk_gnn(
+                    init_model, 
+                    data_info['data'], 
+                    fixed_indices,
+                    device=device
+                )
+                init_ntk_matrix = init_ntk_matrix.cpu()
+            else:
+                init_ntk_matrix, _, selected_data = compute_ntk_from_dataloader(
+                    init_model,
+                    data_loader,
+                    num_samples=num_samples,
+                    class_balanced=class_balanced,
+                    seed=42,
+                    device=device,
+                    return_selected_data=compute_linearization
+                )
+                init_ntk_matrix = init_ntk_matrix.cpu()
+                if selected_data is not None:
+                    selected_data = selected_data.cpu()
+        
+        # Get selected data points for linearization (without computing NTK)
+        if compute_linearization and not compute_ntk_stats:
+            if cfg.model.name == 'gnn_arxiv':
+                # For GNN, store the fixed indices as "selected data"
+                # (we'll need to handle this differently in linearization agreement)
+                pass  # TODO: handle GNN case
+            else:
+                selected_data = sample_data_points(
+                    data_loader,
+                    num_samples=num_samples,
+                    class_balanced=class_balanced,
+                    seed=42
+                )
+                selected_data = selected_data.cpu()
+        
+        # Move init model back to CPU for storage
+        init_model = init_model.cpu()
+        
+        if compute_ntk_stats:
+            print(f"Computed initialization NTK (epoch 0)")
+        if compute_linearization:
+            print(f"Prepared data for linearization agreement computation")
+    except Exception as e:
+        print(f"Error computing initialization NTK: {e}")
+        import traceback
+        traceback.print_exc()
+        return
+    
+    # Store previous epoch NTK for step-to-step comparison (only if computing NTK stats)
+    prev_ntk_matrix = None
+    
+    # Now compute NTK for each epoch and compare to both initialization and previous step
+    for epoch in available_epochs:
+        # Skip epoch 0 since we already computed it and comparing to itself is not informative
+        if epoch == 0:
+            if compute_ntk_stats and init_ntk_matrix is not None:
+                # Store epoch 0 as previous for step-to-step comparison
+                prev_ntk_matrix = init_ntk_matrix.clone()
+            continue
+        
+        # Load checkpoint for this epoch
+        try:
+            checkpoint = torch.load(
+                output_dir / f"checkpoint_epoch_{epoch}_model_{model_idx}.pt", 
+                map_location='cpu'
+            )
+        except FileNotFoundError:
+            print(f"Warning: Checkpoint epoch {epoch} not found, skipping")
+            continue
+        
+        # Create model for this epoch (will be cleaned up after)
+        model = create_model(cfg, device='cpu')
+        model.load_state_dict(checkpoint['model_state_dict'])
+        model = model.to(device)
+        
+        # Initialize variables for results
+        ntk_matrix_cpu = None
+        stats = None
+        ntk_diff_init_frobenius = None
+        ntk_cosine_sim_init = None
+        ntk_relative_change_init = None
+        ntk_cka_init = None
+        ntk_diff_prev_frobenius = None
+        ntk_cosine_sim_prev = None
+        ntk_relative_change_prev = None
+        ntk_cka_prev = None
+        
+        # Compute NTK statistics (if enabled)
+        if compute_ntk_stats:
+            try:
+                if cfg.model.name == 'gnn_arxiv':
+                    ntk_matrix, stats = compute_ntk_gnn(
+                        model, 
+                        data_info['data'], 
+                        fixed_indices,
+                        device=device
+                    )
+                else:
+                    ntk_matrix, stats, _ = compute_ntk_from_dataloader(
+                        model,
+                        data_loader,
+                        num_samples=num_samples,
+                        class_balanced=class_balanced,
+                        seed=42,
+                        device=device
+                    )
+                
+                # Move to CPU for comparison
+                ntk_matrix_cpu = ntk_matrix.cpu()
+                
+                # === Comparison to Initialization ===
+                if init_ntk_matrix is not None:
+                    ntk_diff_init = ntk_matrix_cpu - init_ntk_matrix  # (N, N)
+                    ntk_diff_init_np = ntk_diff_init.numpy()
+                    ntk_diff_init_frobenius = float(np.linalg.norm(ntk_diff_init_np, 'fro'))
+                    
+                    # Cosine similarity vs initialization
+                    ntk_flat_init = init_ntk_matrix.flatten().numpy()
+                    ntk_flat_curr = ntk_matrix_cpu.flatten().numpy()
+                    norm_init = np.linalg.norm(ntk_flat_init)
+                    norm_curr = np.linalg.norm(ntk_flat_curr)
+                    
+                    if norm_init > 0 and norm_curr > 0:
+                        ntk_cosine_sim_init = float(np.dot(ntk_flat_init, ntk_flat_curr) / (norm_init * norm_curr))
+                    else:
+                        ntk_cosine_sim_init = 0.0
+                    
+                    # Relative change vs initialization
+                    if norm_init > 0:
+                        ntk_relative_change_init = ntk_diff_init_frobenius / norm_init
+                    else:
+                        ntk_relative_change_init = 0.0
+                    
+                    # CKA vs initialization
+                    ntk_cka_init = compute_cka(init_ntk_matrix, ntk_matrix_cpu)
+                
+                # === Comparison to Previous Step ===
+                if prev_ntk_matrix is not None:
+                    ntk_diff_prev = ntk_matrix_cpu - prev_ntk_matrix  # (N, N)
+                    ntk_diff_prev_np = ntk_diff_prev.numpy()
+                    ntk_diff_prev_frobenius = float(np.linalg.norm(ntk_diff_prev_np, 'fro'))
+                    
+                    # Cosine similarity vs previous step
+                    ntk_flat_prev = prev_ntk_matrix.flatten().numpy()
+                    norm_prev = np.linalg.norm(ntk_flat_prev)
+                    
+                    if norm_prev > 0 and norm_curr > 0:
+                        ntk_cosine_sim_prev = float(np.dot(ntk_flat_prev, ntk_flat_curr) / (norm_prev * norm_curr))
+                    else:
+                        ntk_cosine_sim_prev = 0.0
+                    
+                    # Relative change vs previous step
+                    if norm_prev > 0:
+                        ntk_relative_change_prev = ntk_diff_prev_frobenius / norm_prev
+                    else:
+                        ntk_relative_change_prev = 0.0
+                    
+                    # CKA vs previous step
+                    ntk_cka_prev = compute_cka(prev_ntk_matrix, ntk_matrix_cpu)
+                else:
+                    # No previous step available (shouldn't happen after epoch 0)
+                    ntk_diff_prev_frobenius = 0.0
+                    ntk_cosine_sim_prev = 1.0
+                    ntk_relative_change_prev = 0.0
+                    ntk_cka_prev = 1.0
+                
+            except Exception as e:
+                print(f"Error computing NTK for epoch {epoch}: {e}")
+                import traceback
+                traceback.print_exc()
+                # Clean up before continuing
+                del model
+                del checkpoint
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                continue
+        
+        # === Linearization Agreement ===
+        # Compute agreement between f_theta and its linearization around initialization
+        linearization_agreement = None
+        if compute_linearization and selected_data is not None and init_model_state_dict is not None and cfg.model.name != 'gnn_arxiv':
+            try:
+                # Recreate init_model from state dict
+                init_model_for_lin = create_model(cfg, device='cpu')
+                init_model_for_lin.load_state_dict(init_model_state_dict)
+                
+                # Compute linearization agreement
+                linearization_agreement = compute_linearization_agreement(
+                    init_model_for_lin,
+                    model,
+                    selected_data.to(device),
+                    device=device
+                )
+                
+                # Clean up
+                del init_model_for_lin
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception as e:
+                print(f"Warning: Failed to compute linearization agreement for epoch {epoch}: {e}")
+                linearization_agreement = None
+        
+        # Update previous NTK for next iteration (only if computing NTK stats)
+        if compute_ntk_stats and ntk_matrix_cpu is not None:
+            prev_ntk_matrix = ntk_matrix_cpu.clone()
+        
+        epoch_results = {
+            'epoch': epoch,
+            'ntk_stats': stats,
+            # Comparison to initialization
+            'ntk_diff_frobenius_init': ntk_diff_init_frobenius,
+            'ntk_cosine_sim_init': ntk_cosine_sim_init,
+            'ntk_relative_change_init': ntk_relative_change_init,
+            'ntk_cka_init': ntk_cka_init,
+            # Comparison to previous step
+            'ntk_diff_frobenius_prev': ntk_diff_prev_frobenius,
+            'ntk_cosine_sim_prev': ntk_cosine_sim_prev,
+            'ntk_relative_change_prev': ntk_relative_change_prev,
+            'ntk_cka_prev': ntk_cka_prev,
+            # Linearization agreement
+            'linearization_agreement': linearization_agreement,
+            'num_samples': ntk_matrix_cpu.shape[0] if ntk_matrix_cpu is not None else num_samples,
+        }
+        
+        # Optionally save NTK matrix (can be large, so we skip by default)
+        if compute_ntk_stats and ntk_config.get('save_matrix', False) and ntk_matrix_cpu is not None:
+            epoch_results['ntk_matrix'] = ntk_matrix_cpu
+        
+        all_epoch_results.append(epoch_results)
+        
+        # Print results
+        if compute_ntk_stats and stats is not None:
+            print(f"Epoch {epoch} NTK - Trace: {stats['trace']:.4f}, "
+                  f"Max eig: {stats['max_eigenvalue']:.4f}, "
+                  f"Min eig: {stats['min_eigenvalue']:.4f}, "
+                  f"Condition: {stats['condition_number']:.4f}")
+            if ntk_diff_init_frobenius is not None:
+                print(f"Epoch {epoch} NTK vs init - Frobenius diff: {ntk_diff_init_frobenius:.4f}, "
+                      f"Cosine sim: {ntk_cosine_sim_init:.4f}, "
+                      f"Relative change: {ntk_relative_change_init:.4f}, "
+                      f"CKA: {ntk_cka_init:.4f}")
+            if ntk_diff_prev_frobenius is not None:
+                print(f"Epoch {epoch} NTK vs prev - Frobenius diff: {ntk_diff_prev_frobenius:.4f}, "
+                      f"Cosine sim: {ntk_cosine_sim_prev:.4f}, "
+                      f"Relative change: {ntk_relative_change_prev:.4f}, "
+                      f"CKA: {ntk_cka_prev:.4f}")
+        if linearization_agreement is not None:
+            print(f"Epoch {epoch} Linearization agreement - MSE: {linearization_agreement['mse']:.6f}, "
+                  f"Relative error: {linearization_agreement['relative_error']:.6f}, "
+                  f"Cosine sim: {linearization_agreement['cosine_sim']:.4f}")
+            if 'accuracy_agreement' in linearization_agreement:
+                print(f"  Accuracy agreement: {linearization_agreement['accuracy_agreement']:.4f}")
+        
+        if cfg.logging.get('use_wandb', False):
+            try:
+                import wandb
+                if wandb.run is not None:
+                    wandb_log = {}
+                    for key, value in stats.items():
+                        wandb_log[f'ntk_{key}'] = value
+                    # Comparison to initialization
+                    wandb_log['ntk_diff_frobenius_init'] = ntk_diff_init_frobenius
+                    wandb_log['ntk_cosine_sim_init'] = ntk_cosine_sim_init
+                    wandb_log['ntk_relative_change_init'] = ntk_relative_change_init
+                    wandb_log['ntk_cka_init'] = ntk_cka_init
+                    # Comparison to previous step
+                    wandb_log['ntk_diff_frobenius_prev'] = ntk_diff_prev_frobenius
+                    wandb_log['ntk_cosine_sim_prev'] = ntk_cosine_sim_prev
+                    wandb_log['ntk_relative_change_prev'] = ntk_relative_change_prev
+                    wandb_log['ntk_cka_prev'] = ntk_cka_prev
+                # Linearization agreement metrics
+                if linearization_agreement is not None:
+                    for key, value in linearization_agreement.items():
+                        wandb_log[f'linearization_{key}'] = value
+                wandb_log['epoch'] = epoch
+                wandb.log(wandb_log)
+            except ImportError:
+                print("Warning: wandb not available")
+        
+        # Clean up for this epoch
+        if compute_ntk_stats:
+            if 'ntk_diff_init' in locals() and ntk_diff_init is not None:
+                del ntk_diff_init
+            if 'ntk_diff_prev' in locals() and ntk_diff_prev is not None:
+                del ntk_diff_prev
+            if ntk_matrix_cpu is not None and not ntk_config.get('save_matrix', False):
+                del ntk_matrix_cpu
+            if stats is not None:
+                del stats
+        del model
+        del checkpoint
+        
+        # Force garbage collection and clear GPU cache to free memory
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    
+    torch.save({
+        'all_epoch_results': all_epoch_results,
+        'num_epochs': len(all_epoch_results),
+        'num_samples': num_samples,
+        'class_balanced': class_balanced,
+        'split': split,
+    }, output_dir / "ntk_tracking_all_epochs.pt")
+    
+    print(f"\nSaved NTK tracking results to {output_dir}/ntk_tracking_all_epochs.pt")
+
+
 def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, mask_seed: int, epoch: int | None = None):
     """Perform LMC interpolation analysis for a specific epoch or final models."""
     num_models = cfg.get('num_models', 1)
@@ -767,8 +1225,7 @@ def main(cfg: DictConfig) -> None:
     
     optimization_seeds_raw = cfg.get('optimization_seed', None)
     if optimization_seeds_raw is None:
-        # Default to same as init_seeds if not specified
-        optimization_seeds = init_seeds
+        optimization_seeds = [random.randint(0, 2**32 - 1) for _ in range(cfg.num_models)]
     elif hasattr(optimization_seeds_raw, '__iter__'):
         optimization_seeds = [int(x) for x in optimization_seeds_raw]
     else:
