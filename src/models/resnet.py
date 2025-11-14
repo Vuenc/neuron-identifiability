@@ -42,7 +42,7 @@ class SparseConv2d(nn.Module):
         self.weight.register_hook(lambda grad: self.mask * grad)
 
         if do_normal_mask:
-            self.register_buffer('normal_mask', conv_normal_mask(out_channels, in_channels, kernel_size, mask_num), persistent=True)
+            self.register_buffer('normal_mask', conv_normal_mask(out_channels, in_channels, kernel_size, mask_rng), persistent=True)
         else:
             self.register_buffer('normal_mask', torch.ones(size=(out_channels, in_channels, kernel_size, kernel_size)), persistent=True)
 
@@ -121,14 +121,14 @@ class SparseBasicBlock(nn.Module):
     """Sparse ResNet basic block."""
     expansion = 1
 
-    def __init__(self, in_planes, planes, mask_num, mask_params, stride=1, option='B'):
+    def __init__(self, in_planes, planes, mask_num, mask_params, mask_rng: torch.Generator, stride=1, option='B'):
         super(SparseBasicBlock, self).__init__()
         
-        self.conv1 = SparseConv2d(in_planes, planes, mask_num, stride=stride, 
+        self.conv1 = SparseConv2d(in_planes, planes, mask_num, stride=stride, mask_rng=mask_rng,
                                  **mask_params['conv'])
         self.ln1 = nn.GroupNorm(1, planes)
         
-        self.conv2 = SparseConv2d(planes, planes, mask_num + 1, stride=1, 
+        self.conv2 = SparseConv2d(planes, planes, mask_num + 1, stride=1, mask_rng=mask_rng,
                                  **mask_params['conv'])
         self.ln2 = nn.GroupNorm(1, planes)
 
@@ -139,7 +139,7 @@ class SparseBasicBlock(nn.Module):
                     F.pad(x[:, :, ::2, ::2], (0, 0, 0, 0, planes//4, planes//4), "constant", 0))
             elif option == 'B':
                 self.shortcut = nn.Sequential(
-                    SparseConv2d(in_planes, self.expansion * planes, mask_num + 2, 
+                    SparseConv2d(in_planes, self.expansion * planes, mask_num + 2, mask_rng=mask_rng,
                                kernel_size=1, stride=stride, padding=0, bias=False, 
                                **mask_params['skip']),
                     nn.GroupNorm(1, self.expansion * planes)
@@ -327,7 +327,7 @@ class WResNet(nn.Module):
         strides = [stride] + [1] * (num_blocks - 1)
         layers = []
         for stride in strides:
-            layers.append(block(self.in_planes, planes, mask_num, mask_params, stride, mask_rng=mask_rng))
+            layers.append(block(self.in_planes, planes, mask_num, mask_params, stride=stride, mask_rng=mask_rng))
             mask_num += 3
             self.in_planes = planes * block.expansion
         return nn.Sequential(*layers)
