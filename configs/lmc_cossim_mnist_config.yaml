@@ -1,0 +1,16 @@
+defaults:
+  - config  # inherits from base config.yaml
+  - _self_  # keeps specific-config overrides last
+training:
+  num_epochs: 50
+  save_every: 1
+  cosine_similarity:
+    enabled: true
+    save_every: 1
+  functional_similarity:
+    enabled: true
+    save_every: 1
+interpolation:
+  enabled: true
+  type: grid
+  save_every: null
