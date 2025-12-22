@@ -222,13 +222,6 @@ class NoiseBasicBlock(nn.Module):
         out = F.relu(out)
         return out
 
-
-def _weights_init(m):
-    """Initialize weights for ResNet."""
-    if isinstance(m, nn.Linear) or isinstance(m, nn.Conv2d):
-        nn.init.kaiming_normal_(m.weight)
-
-
 @register('model', 'resnet_standard')
 class ResNet(nn.Module):
     """Standard ResNet."""
@@ -245,7 +238,6 @@ class ResNet(nn.Module):
         self.layer3 = self._make_layer(block, 64*w, num_blocks[2], stride=2)
 
         self.linear = nn.Linear(64*w, num_classes)
-        self.apply(_weights_init)
 
     def _make_layer(self, block, planes, num_blocks, stride):
         strides = [stride] + [1] * (num_blocks - 1)
@@ -321,7 +313,6 @@ class WResNet(nn.Module):
         mask_num += num_blocks[2] * 3
 
         self.linear = SparseLinear(64*w, num_classes, mask_rng=mask_rng, mask_num=mask_num, bias=True, **get_mask_params('linear'))
-        self.apply(_weights_init)
 
     def _make_layer(self, block, mask_num, planes, num_blocks, stride, mask_params, mask_rng: torch.Generator):
         strides = [stride] + [1] * (num_blocks - 1)
@@ -407,7 +398,6 @@ class NoiseResNet(nn.Module):
         mask_num += num_blocks[2] * 3
 
         self.linear = NoiseLinear(64*w, num_classes, mask_num=mask_num, mask_rng=mask_rng, **get_mask_params('linear'))
-        self.apply(_weights_init)
 
     def _make_layer(self, block, mask_num, planes, num_blocks, stride, mask_params, mask_rng: torch.Generator):
         strides = [stride] + [1] * (num_blocks - 1)
