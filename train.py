@@ -209,7 +209,6 @@ def setup_wandb(cfg: DictConfig):
         return None
     
     try:
-        import wandb
         wandb_config = {
             'project': cfg.logging.get('project', 'asymmetric-networks'),
             'name': cfg.logging.get('name', f"{cfg.experiment_name}_multi_model"),

@@ -1,4 +1,8 @@
-# @package scheduler
-name: resnet_scheduler
-milestones: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
-gamma: 1.259
+# @package _global_
+
+scheduler:
+  name: resnet_scheduler
+  milestones: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+  gamma: 1.259
+optimizer:
+  lr: 0.0001
