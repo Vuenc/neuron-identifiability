@@ -94,58 +94,52 @@ def compute_activation_matching_results(checkpoint_path_1, checkpoint_path_2, de
 
     return results
 
-MODEL_1_RANGE = list(range(1, 17, 2))
-EPOCH_RANGE = list(range(0, 101, 5))
-# EPOCH_RANGE = list(range(0, 11, 1))
-MAX_PARALLEL_PROCESSES = 4 
+def main():
+    MODEL_1_RANGE = list(range(1, 17, 2))
+    EPOCH_RANGE = list(range(0, 101, 5))
+    # EPOCH_RANGE = list(range(0, 11, 1))
+    MAX_PARALLEL_PROCESSES = 4 
 
-all_results = []
-import tqdm
-import json
+    all_results = []
+    import tqdm
+    import json
+    import argparse
 
-# Assuming all are using the same dataset
-with hydra.initialize(version_base=None, config_path=str(pathlib.Path(list(checkpoint_directories.values())[0]))):
-    _cfg = hydra.compose(config_name="config")
-data_info = train.setup_data_loaders(_cfg)
+    parser = argparse.ArgumentParser("measure_rebasinability.py")
+    parser.add_argument("--output-file", type=str, required=True)
+    args = parser.parse_args()
 
-checkpoint_path = lambda model_index, epoch: f"{checkpoint_directories[run_key]}/checkpoint_epoch_{epoch}_model_{model_index}.pt"
+    # Assuming all are using the same dataset
+    with hydra.initialize(version_base=None, config_path=str(pathlib.Path(list(checkpoint_directories.values())[0]))):
+        _cfg = hydra.compose(config_name="config")
+    data_info = train.setup_data_loaders(_cfg)
 
-for run_key in (tqdm_run := tqdm.tqdm(checkpoint_directories.keys())):
-    tqdm_run.set_description(f"Run: {run_key}")
-    for model1_index in (tqdm_model_pair := tqdm.tqdm(MODEL_1_RANGE, desc=run_key, leave=False)):
-        model2_index = model1_index + 1
-        tqdm_model_pair.set_description(f"Model pair: (Model {model1_index}, Model {model2_index})")
-        with suppress_prints(suppress=False):
-            # with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_PARALLEL_PROCESSES) as executor:
-                import types
-                executor = types.SimpleNamespace(submit=lambda f, **kwargs: types.SimpleNamespace(result = lambda: f(**kwargs)))
-                model_pair_results = [future.result() for future in [
-                    executor.submit(compute_activation_matching_results,
-                        **dict(checkpoint_path_1=checkpoint_path(model1_index, epoch), checkpoint_path_2=checkpoint_path(model2_index, epoch), data_info=data_info)
-                    ) for epoch in EPOCH_RANGE]
-                ]
-        for matching_results, epoch in zip(model_pair_results, EPOCH_RANGE):
-            all_results.append({
-                "run_key": run_key,
-                "model1_index": model1_index,
-                "model2_index": model2_index,
-                "epoch": epoch,
-                "matching_results": matching_results
-            })
-        # all_results.extend(model_results)
-        # for epoch in (tqdm_epoch := tqdm.tqdm(EPOCH_RANGE)):
-            # tqdm_epoch.set_description(f"Epoch: {epoch}")
-            # with suppress_prints():
-            #     matching_results = compute_activation_matching_results(
-            #         *[f"{checkpoint_directories[run_key]}/checkpoint_epoch_{epoch}_model_{model_index}.pt"
-            #         for model_index in [model1_index, model2_index]],
-            #         data_info=data_info)
-            # all_results.append({
-            #     "run_key": run_key,
-            #     "model1_index": model1_index,
-            #     "model2_index": model2_index,
-            #     "epoch": epoch,
-            #     "matching_results": matching_results
-            # })
-        with open("outputs/.activation-matching-results-mlp.json", "w") as f:
-            json.dump(all_results, f)
+    checkpoint_path = lambda model_index, epoch: f"{checkpoint_directories[run_key]}/checkpoint_epoch_{epoch}_model_{model_index}.pt"
+
+    for run_key in (tqdm_run := tqdm.tqdm(checkpoint_directories.keys())):
+        tqdm_run.set_description(f"Run: {run_key}")
+        for model1_index in (tqdm_model_pair := tqdm.tqdm(MODEL_1_RANGE, desc=run_key, leave=False)):
+            model2_index = model1_index + 1
+            tqdm_model_pair.set_description(f"Model pair: (Model {model1_index}, Model {model2_index})")
+            with suppress_prints(suppress=False):
+                with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_PARALLEL_PROCESSES) as executor:
+                    # import types
+                    # executor = types.SimpleNamespace(submit=lambda f, **kwargs: types.SimpleNamespace(result = lambda: f(**kwargs)))
+                    model_pair_results = [future.result() for future in [
+                        executor.submit(compute_activation_matching_results,
+                            **dict(checkpoint_path_1=checkpoint_path(model1_index, epoch), checkpoint_path_2=checkpoint_path(model2_index, epoch), data_info=data_info)
+                        ) for epoch in EPOCH_RANGE]
+                    ]
+            for matching_results, epoch in zip(model_pair_results, EPOCH_RANGE):
+                all_results.append({
+                    "run_key": run_key,
+                    "model1_index": model1_index,
+                    "model2_index": model2_index,
+                    "epoch": epoch,
+                    "matching_results": matching_results
+                })
+            with open(args.output_file, "w") as f:
+                json.dump(all_results, f)
+
+if __name__ == "__main__":
+    main()
