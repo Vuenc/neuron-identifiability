@@ -8,14 +8,17 @@ import numpy as np
 from contextlib import contextmanager
 
 @contextmanager
-def suppress_prints():
+def suppress_prints(suppress=True):
     """Context manager to suppress all print statements."""
-    original_print = __builtins__.print
-    __builtins__.print = lambda *args, **kwargs: None
-    try:
-        yield original_print
-    finally:
-        __builtins__.print = original_print
+    if not suppress:
+        yield
+    else:
+        original_print = __builtins__.print
+        __builtins__.print = lambda *args, **kwargs: None
+        try:
+            yield original_print
+        finally:
+            __builtins__.print = original_print
 
 checkpoint_directories = {
     "mlp_symmetry0": "outputs/2025-12-17/12-18-16_mlp_mnist_sym-0__3pb1rw8b__kk13eg0q",
@@ -46,7 +49,7 @@ def compute_activation_matching_results(checkpoint_path_1, checkpoint_path_2, de
 
     with hydra.initialize(version_base=None, config_path=str(pathlib.Path(checkpoint_path_1).parent)):
         cfg = hydra.compose(config_name="config")
-    cfg.dataset.batch_size = 10000
+    cfg.dataset.batch_size = 500
     if data_info is None:
         data_info = train.setup_data_loaders(cfg)
 
@@ -54,31 +57,35 @@ def compute_activation_matching_results(checkpoint_path_1, checkpoint_path_2, de
     model1.load_state_dict(torch.load(checkpoint_path_1, map_location=device)["model_state_dict"])
     model2.load_state_dict(torch.load(checkpoint_path_2, map_location=device)["model_state_dict"])
 
-    permutation_spec = src.utils.rebasin.activation_matching.mlp_permutation_spec(3, norm=True, bias=True)
-    output_permutation_by_layer = src.utils.rebasin.activation_matching.activation_matching(
+    permutation_spec = src.utils.rebasin.mlp_permutation_spec(3, norm=True, bias=True)
+    activation_matching_results = src.utils.rebasin.activation_matching.activation_matching(
         permutation_spec, model1, model2, data_info["train_loader"], device=device
     )
     results = []
-    for layer_name, matching_result in output_permutation_by_layer.items():
-        d = len(matching_result.optimal_permutation)
-        optimal_permutation_objective = matching_result.activation_similarities[range(d), matching_result.optimal_permutation].mean().item()
-        identity_objective = matching_result.activation_similarities[range(d), range(d)].mean().item()
-        random_permutation_objectives = [matching_result.activation_similarities[range(d), torch.randperm(d)].mean().item() for _ in range(100)]
+    with torch.no_grad():
+        for (matching_mode, correlation_mode), results_per_layer in activation_matching_results.items():
+            for layer_name, matching_result in results_per_layer.items():
+                d = len(matching_result.optimal_permutation)
+                optimal_permutation_objective = matching_result.activation_similarities[range(d), matching_result.optimal_permutation].mean().item()
+                identity_objective = matching_result.activation_similarities[range(d), range(d)].mean().item()
+                random_permutation_objectives = [matching_result.activation_similarities[range(d), torch.randperm(d)].mean().item() for _ in range(100)]
 
-        results.append({
-            "layer": layer_name,
-            "objectives": {
-                "optimal": optimal_permutation_objective,
-                "identity": identity_objective,
-                "random": random_permutation_objectives,
-                "random_mean": np.mean(random_permutation_objectives),
-                "random_std": np.std(random_permutation_objectives, ddof=1)
-            },
-            "permutations": {
-                "optimal": matching_result.optimal_permutation.tolist(),
-            }
-            # "activation_similarities": matching_result.activation_similarities.tolist()
-        })
+                results.append({
+                    "matching_mode": matching_mode,
+                    "correlation_mode": correlation_mode.value,
+                    "layer": layer_name,
+                    "objectives": {
+                        "optimal": optimal_permutation_objective,
+                        "identity": identity_objective,
+                        "random": random_permutation_objectives,
+                        "random_mean": np.mean(random_permutation_objectives),
+                        "random_std": np.std(random_permutation_objectives, ddof=1)
+                    },
+                    "permutations": {
+                        "optimal": matching_result.optimal_permutation.tolist(),
+                    }
+                    # "activation_similarities": matching_result.activation_similarities.tolist()
+                })
         # print(f"\nLayer: {layer_name}")
         # print(f"  (mean) Frobenius inner product (identity)               : {activation_similarities[range(d), range(d)].mean():.1f}")
         # print(f"  (mean) Frobenius inner product (best permutation)       : {activation_similarities[*permutation].mean():.1f}")
@@ -89,7 +96,8 @@ def compute_activation_matching_results(checkpoint_path_1, checkpoint_path_2, de
 
 MODEL_1_RANGE = list(range(1, 17, 2))
 EPOCH_RANGE = list(range(0, 101, 5))
-MAX_PARALLEL_PROCESSES = 25
+# EPOCH_RANGE = list(range(0, 11, 1))
+MAX_PARALLEL_PROCESSES = 4 
 
 all_results = []
 import tqdm
@@ -107,8 +115,10 @@ for run_key in (tqdm_run := tqdm.tqdm(checkpoint_directories.keys())):
     for model1_index in (tqdm_model_pair := tqdm.tqdm(MODEL_1_RANGE, desc=run_key, leave=False)):
         model2_index = model1_index + 1
         tqdm_model_pair.set_description(f"Model pair: (Model {model1_index}, Model {model2_index})")
-        with suppress_prints():
-            with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_PARALLEL_PROCESSES) as executor:
+        with suppress_prints(suppress=False):
+            # with concurrent.futures.ProcessPoolExecutor(max_workers=MAX_PARALLEL_PROCESSES) as executor:
+                import types
+                executor = types.SimpleNamespace(submit=lambda f, **kwargs: types.SimpleNamespace(result = lambda: f(**kwargs)))
                 model_pair_results = [future.result() for future in [
                     executor.submit(compute_activation_matching_results,
                         **dict(checkpoint_path_1=checkpoint_path(model1_index, epoch), checkpoint_path_2=checkpoint_path(model2_index, epoch), data_info=data_info)
@@ -137,5 +147,5 @@ for run_key in (tqdm_run := tqdm.tqdm(checkpoint_directories.keys())):
             #     "epoch": epoch,
             #     "matching_results": matching_results
             # })
-        with open("outputs/activation-matching-results-mlp.json", "w") as f:
+        with open("outputs/.activation-matching-results-mlp.json", "w") as f:
             json.dump(all_results, f)
