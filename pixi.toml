@@ -41,8 +41,13 @@ libjpeg-turbo = ">=3.1.0,<4"
 [feature.ffcv.pypi-dependencies]
 ffcv = ">=1.0.2, <2"
 
+[feature.plotting.dependencies]
+ipywidgets = ">=8.1.8,<9"
+anywidget = ">=0.9.21,<0.10"
+texlive-core = ">=20230313,<20230314"
+
 [activation.env]
 PKG_CONFIG_PATH = "{CONDA_PREFIX}/lib/pkgconfig:{ENV:PKG_CONFIG_PATH}"
 
 [environments]
-default = ["gnn", "ffcv"]
+default = ["gnn", "ffcv", "plotting"]
