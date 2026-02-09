@@ -258,6 +258,16 @@ class WMLP(nn.Module):
                 count += (1 - module.mask).sum().int().item()
         return count
 
+    def convert_to_non_asymmetric_model(self) -> MLP:
+        mask_constant = self.lins[0].mask_constant
+        state_dict = self.state_dict()
+        for i in range(self.num_layers):
+            state_dict[f"lins.{i}.weight"] = state_dict[f"lins.{i}.weight"] * state_dict[f"lins.{i}.mask"] + state_dict[f"lins.{i}.normal_mask"] * (1 - state_dict[f"lins.{i}.mask"]) * mask_constant
+            del state_dict[f"lins.{i}.mask"]
+            del state_dict[f"lins.{i}.normal_mask"]
+        mlp = MLP(self.input_dim, self.hidden_dim, self.output_dim, self.num_layers, self.norm_type, mask_params=None, elementwise_affine=self.elementwise_affine, activation=self.activation).to(next(iter(state_dict.values())).device)
+        mlp.load_state_dict(state_dict)
+        return mlp
 
 @register('model', 'mlp_noise_asym')
 class NoiseMLP(nn.Module):
@@ -332,6 +342,16 @@ class NoiseMLP(nn.Module):
         
         x = self.lins[-1](x)
         return x
+
+    def convert_to_non_asymmetric_model(self) -> MLP:
+        mask_constant = self.lins[0].mask_constant
+        state_dict = self.state_dict()
+        for i in range(self.num_layers):
+            state_dict[f"lins.{i}.weight"] = state_dict[f"lins.{i}.weight"] + mask_constant * state_dict[f"lins.{i}.noise"]
+            del state_dict[f"lins.{i}.noise"]
+        mlp = MLP(self.input_dim, self.hidden_dim, self.output_dim, self.num_layers, self.norm_type, mask_params=None, elementwise_affine=self.elementwise_affine, activation=self.activation).to(next(iter(state_dict.values())).device)
+        mlp.load_state_dict(state_dict)
+        return mlp
 
 
 @register('model', 'mlp_sigma_asym')

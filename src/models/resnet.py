@@ -263,6 +263,9 @@ class WResNet(nn.Module):
     def __init__(self, block, num_blocks, mask_params, w=1, num_classes=10, mask_seed=None):
         super(WResNet, self).__init__()
         self.in_planes = 16 * w
+        self.num_blocks = num_blocks
+        self.w = w
+        self.num_classes = num_classes
         
         def get_mask_params(layer_key):
             default_params = mask_params.get('default', None)
@@ -333,6 +336,22 @@ class WResNet(nn.Module):
         out = self.linear(out)
         return out
 
+    
+    def convert_to_non_asymmetric_model(self) -> ResNet:
+        mask_constant = self.conv1.mask_constant
+        state_dict = self.state_dict()
+        mask_keys = [key for key in state_dict if key.endswith(".mask")]
+        for mask_key in mask_keys:
+            normal_mask_key = mask_key.removesuffix(".mask") + ".normal_mask"
+            weight_key = mask_key.removesuffix(".mask") + ".weight"
+            mask, normal_mask, weight = state_dict[mask_key], state_dict[normal_mask_key], state_dict[weight_key]
+            state_dict[weight_key] = weight * mask + normal_mask * (1 - mask) * mask_constant
+            del state_dict[mask_key]
+            del state_dict[normal_mask_key]
+        resnet = ResNet(BasicBlock, self.num_blocks, self.w, self.num_classes).to(next(iter(state_dict.values())).device)
+        resnet.load_state_dict(state_dict)
+        return resnet
+
 
 @register('model', 'resnet_noise_asym')
 class NoiseResNet(nn.Module):
@@ -341,6 +360,9 @@ class NoiseResNet(nn.Module):
     def __init__(self, block, num_blocks, mask_params, w=1, num_classes=10, mask_seed=None):
         super(NoiseResNet, self).__init__()
         self.in_planes = 16 * w
+        self.num_blocks = num_blocks
+        self.w = w
+        self.num_classes = num_classes
         
         def get_mask_params(layer_key):
             
@@ -403,6 +425,19 @@ class NoiseResNet(nn.Module):
         out = out.view(out.size(0), -1)
         out = self.linear(out)
         return out
+
+    def convert_to_non_asymmetric_model(self) -> ResNet:
+        mask_constant = self.conv1.mask_constant
+        state_dict = self.state_dict()
+        noise_keys = [key for key in state_dict if key.endswith(".noise")]
+        for noise_key in noise_keys:
+            weight_key = noise_key.removesuffix(".noise") + ".weight"
+            noise, weight = state_dict[noise_key], state_dict[weight_key]
+            state_dict[weight_key] = weight + noise * mask_constant
+            del state_dict[noise_key]
+        resnet = ResNet(BasicBlock, self.num_blocks, self.w, self.num_classes).to(next(iter(state_dict.values())).device)
+        resnet.load_state_dict(state_dict)
+        return resnet
 
 
 # Convenience functions for different ResNet sizes
