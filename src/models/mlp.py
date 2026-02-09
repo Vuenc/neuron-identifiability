@@ -87,7 +87,7 @@ class SparseLinear(nn.Module):
 
 class NoiseLinear(nn.Module):
     """Linear layer with fixed Gaussian noise injection for symmetry breaking."""
-    def __init__(self, in_dim, out_dim, mask_rng: torch.Generator, mask_num=0, mask_constant=1.0, **kwargs):
+    def __init__(self, in_dim, out_dim, mask_rng: torch.Generator, mask_constant=1.0, **kwargs):
         super().__init__()
         
         self.weight = nn.Parameter(torch.empty(out_dim, in_dim))
@@ -97,7 +97,6 @@ class NoiseLinear(nn.Module):
         noise = torch.randn(out_dim, in_dim, generator=mask_rng)
         self.register_buffer('noise', noise, persistent=True)
         
-        self.mask_num = mask_num
         self.mask_constant = mask_constant
         self.reset_parameters()
     
@@ -181,6 +180,7 @@ class WMLP(nn.Module):
         self.output_dim = output_dim
         self.num_layers = num_layers
         self.activation = activation
+        self.elementwise_affine = elementwise_affine
         
         self.lins = nn.ModuleList()
         self.norms = nn.ModuleList()
@@ -261,7 +261,7 @@ class WMLP(nn.Module):
 
 @register('model', 'mlp_noise_asym')
 class NoiseMLP(nn.Module):
-    def __init__(self, input_dim, hidden_dim, output_dim, num_layers,
+    def __init__(self, input_dim: int, hidden_dim, output_dim, num_layers,
                  mask_params: Dict, norm='layer', elementwise_affine=True, activation='gelu', mask_seed=None):
         super().__init__()
         self.input_dim = input_dim
@@ -269,6 +269,7 @@ class NoiseMLP(nn.Module):
         self.output_dim = output_dim
         self.num_layers = num_layers
         self.activation = activation
+        self.elementwise_affine = elementwise_affine
         
         self.lins = nn.ModuleList()
         self.norms = nn.ModuleList()
@@ -298,17 +299,17 @@ class NoiseMLP(nn.Module):
 
         if num_layers == 1:
             first_layer_params = get_mask_params(0)
-            self.lins.append(NoiseLinear(input_dim, output_dim, mask_num=0, **first_layer_params, mask_rng=mask_rng))
+            self.lins.append(NoiseLinear(input_dim, output_dim, **first_layer_params, mask_rng=mask_rng))
         else:
             first_layer_params = get_mask_params(0)
-            self.lins.append(NoiseLinear(input_dim, hidden_dim, mask_num=0, **first_layer_params, mask_rng=mask_rng))
+            self.lins.append(NoiseLinear(input_dim, hidden_dim, **first_layer_params, mask_rng=mask_rng))
             
             for i in range(num_layers - 2):
                 hidden_layer_params = get_mask_params(i+1)
-                self.lins.append(NoiseLinear(hidden_dim, hidden_dim, mask_num=i+1, **hidden_layer_params, mask_rng=mask_rng))
+                self.lins.append(NoiseLinear(hidden_dim, hidden_dim, **hidden_layer_params, mask_rng=mask_rng))
             
             output_layer_params = get_mask_params(num_layers-1)
-            self.lins.append(NoiseLinear(hidden_dim, output_dim, mask_num=num_layers-1, **output_layer_params, mask_rng=mask_rng))
+            self.lins.append(NoiseLinear(hidden_dim, output_dim, **output_layer_params, mask_rng=mask_rng))
             
             # Add normalization layers
             if self.norm_type in ('layer', 'batch'):

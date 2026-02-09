@@ -28,7 +28,7 @@ class LambdaLayer(nn.Module):
 class SparseConv2d(nn.Module):
     """Sparse 2D convolution with fixed mask."""
     
-    def __init__(self, in_channels, out_channels, mask_num, mask_rng: torch.Generator, mask_type='random_subsets', 
+    def __init__(self, in_channels, out_channels, mask_rng: torch.Generator, mask_type='random_subsets', 
                  do_normal_mask=True, num_fixed=6, mask_constant=0, kernel_size=3, 
                  stride=1, padding=1, bias=False):
         super().__init__()
@@ -55,7 +55,6 @@ class SparseConv2d(nn.Module):
         self.out_channels = out_channels
         self.kernel_size = kernel_size
         self.mask_constant = mask_constant
-        self.mask_num = mask_num
         self.stride = stride
         self.padding = padding
         self.reset_parameters()
@@ -82,7 +81,7 @@ class NoiseConv2d(nn.Module):
     """2D convolution with fixed Gaussian noise injection for symmetry breaking."""
     
     def __init__(self, in_channels, out_channels, mask_rng: torch.Generator, kernel_size=3, stride=1, 
-                 padding=1, bias=False, mask_num=0, mask_constant=1.0, **kwargs):
+                 padding=1, bias=False, mask_constant=1.0, **kwargs):
         super().__init__()
         
         self.weight = nn.Parameter(torch.empty(out_channels, in_channels, kernel_size, kernel_size))
@@ -100,7 +99,6 @@ class NoiseConv2d(nn.Module):
         self.kernel_size = kernel_size
         self.stride = stride
         self.padding = padding
-        self.mask_num = mask_num
         self.mask_constant = mask_constant
         self.reset_parameters()
     
@@ -121,14 +119,14 @@ class SparseBasicBlock(nn.Module):
     """Sparse ResNet basic block."""
     expansion = 1
 
-    def __init__(self, in_planes, planes, mask_num, mask_params, mask_rng: torch.Generator, stride=1, option='B'):
+    def __init__(self, in_planes, planes, mask_params, mask_rng: torch.Generator, stride=1, option='B'):
         super(SparseBasicBlock, self).__init__()
         
-        self.conv1 = SparseConv2d(in_planes, planes, mask_num, stride=stride, mask_rng=mask_rng,
+        self.conv1 = SparseConv2d(in_planes, planes, stride=stride, mask_rng=mask_rng,
                                  **mask_params['conv'])
         self.ln1 = nn.GroupNorm(1, planes)
         
-        self.conv2 = SparseConv2d(planes, planes, mask_num + 1, stride=1, mask_rng=mask_rng,
+        self.conv2 = SparseConv2d(planes, planes, stride=1, mask_rng=mask_rng,
                                  **mask_params['conv'])
         self.ln2 = nn.GroupNorm(1, planes)
 
@@ -139,7 +137,7 @@ class SparseBasicBlock(nn.Module):
                     F.pad(x[:, :, ::2, ::2], (0, 0, 0, 0, planes//4, planes//4), "constant", 0))
             elif option == 'B':
                 self.shortcut = nn.Sequential(
-                    SparseConv2d(in_planes, self.expansion * planes, mask_num + 2, mask_rng=mask_rng,
+                    SparseConv2d(in_planes, self.expansion * planes, mask_rng=mask_rng,
                                kernel_size=1, stride=stride, padding=0, bias=False, 
                                **mask_params['skip']),
                     nn.GroupNorm(1, self.expansion * planes)
@@ -192,15 +190,15 @@ class NoiseBasicBlock(nn.Module):
     """ResNet basic block with noise injection for symmetry breaking."""
     expansion = 1
 
-    def __init__(self, in_planes, planes, mask_num, mask_params, mask_rng: torch.Generator, stride=1, option='B'):
+    def __init__(self, in_planes, planes, mask_params, mask_rng: torch.Generator, stride=1, option='B'):
         super(NoiseBasicBlock, self).__init__()
         
         self.conv1 = NoiseConv2d(in_planes, planes, kernel_size=3, stride=stride, 
-                                padding=1, bias=False, mask_num=mask_num, **mask_params['conv'], mask_rng=mask_rng)
+                                padding=1, bias=False, **mask_params['conv'], mask_rng=mask_rng)
         self.ln1 = nn.GroupNorm(1, planes)
         
         self.conv2 = NoiseConv2d(planes, planes, kernel_size=3, stride=1, 
-                                padding=1, bias=False, mask_num=mask_num + 1, **mask_params['conv'], mask_rng=mask_rng)
+                                padding=1, bias=False, **mask_params['conv'], mask_rng=mask_rng)
         self.ln2 = nn.GroupNorm(1, planes)
 
         self.shortcut = nn.Sequential()
@@ -211,7 +209,7 @@ class NoiseBasicBlock(nn.Module):
             elif option == 'B':
                 self.shortcut = nn.Sequential(
                     NoiseConv2d(in_planes, self.expansion * planes, kernel_size=1, 
-                               stride=stride, padding=0, bias=False, mask_num=mask_num + 2, **mask_params['skip'], mask_rng=mask_rng),
+                               stride=stride, padding=0, bias=False, **mask_params['skip'], mask_rng=mask_rng),
                     nn.GroupNorm(1, self.expansion * planes)
                 )
 
@@ -243,7 +241,7 @@ class ResNet(nn.Module):
         strides = [stride] + [1] * (num_blocks - 1)
         layers = []
         for stride in strides:
-            layers.append(block(self.in_planes, planes, stride))
+            layers.append(block(self.in_planes, planes, stride=stride))
             self.in_planes = planes * block.expansion
         return nn.Sequential(*layers)
 
@@ -265,7 +263,6 @@ class WResNet(nn.Module):
     def __init__(self, block, num_blocks, mask_params, w=1, num_classes=10, mask_seed=None):
         super(WResNet, self).__init__()
         self.in_planes = 16 * w
-        mask_num = 0
         
         def get_mask_params(layer_key):
             default_params = mask_params.get('default', None)
@@ -295,31 +292,26 @@ class WResNet(nn.Module):
         if mask_seed is not None:
             mask_rng.manual_seed(mask_seed)
         
-        self.conv1 = SparseConv2d(3, 16*w, mask_num, kernel_size=3, stride=1, 
+        self.conv1 = SparseConv2d(3, 16*w, kernel_size=3, stride=1, 
                                  padding=1, bias=False, mask_rng=mask_rng, **get_mask_params('conv_f'))
         self.ln1 = nn.GroupNorm(1, 16*w)
-        mask_num += 1
 
-        self.layer1 = self._make_layer(block, mask_num, 16*w, num_blocks[0], 
+        self.layer1 = self._make_layer(block, 16*w, num_blocks[0], 
                                      stride=1, mask_params=get_mask_params('conv_1'), mask_rng=mask_rng)
-        mask_num += num_blocks[0] * 3
 
-        self.layer2 = self._make_layer(block, mask_num, 32*w, num_blocks[1], 
+        self.layer2 = self._make_layer(block, 32*w, num_blocks[1], 
                                      stride=2, mask_params=get_mask_params('conv_2'), mask_rng=mask_rng)
-        mask_num += num_blocks[1] * 3
 
-        self.layer3 = self._make_layer(block, mask_num, 64*w, num_blocks[2], 
+        self.layer3 = self._make_layer(block, 64*w, num_blocks[2], 
                                      stride=2, mask_params=get_mask_params('conv_3'), mask_rng=mask_rng)
-        mask_num += num_blocks[2] * 3
 
-        self.linear = SparseLinear(64*w, num_classes, mask_rng=mask_rng, mask_num=mask_num, bias=True, **get_mask_params('linear'))
+        self.linear = SparseLinear(64*w, num_classes, mask_rng=mask_rng, bias=True, **get_mask_params('linear'))
 
-    def _make_layer(self, block, mask_num, planes, num_blocks, stride, mask_params, mask_rng: torch.Generator):
+    def _make_layer(self, block, planes, num_blocks, stride, mask_params, mask_rng: torch.Generator):
         strides = [stride] + [1] * (num_blocks - 1)
         layers = []
         for stride in strides:
-            layers.append(block(self.in_planes, planes, mask_num, mask_params, stride=stride, mask_rng=mask_rng))
-            mask_num += 3
+            layers.append(block(self.in_planes, planes, mask_params, stride=stride, mask_rng=mask_rng))
             self.in_planes = planes * block.expansion
         return nn.Sequential(*layers)
 
@@ -349,7 +341,6 @@ class NoiseResNet(nn.Module):
     def __init__(self, block, num_blocks, mask_params, w=1, num_classes=10, mask_seed=None):
         super(NoiseResNet, self).__init__()
         self.in_planes = 16 * w
-        mask_num = 0
         
         def get_mask_params(layer_key):
             
@@ -381,30 +372,25 @@ class NoiseResNet(nn.Module):
             mask_rng.manual_seed(mask_seed)
         
         self.conv1 = NoiseConv2d(3, 16*w, kernel_size=3, stride=1, 
-                                padding=1, bias=False, mask_num=mask_num, mask_rng=mask_rng, **get_mask_params('conv_f'))
+                                padding=1, bias=False, mask_rng=mask_rng, **get_mask_params('conv_f'))
         self.ln1 = nn.GroupNorm(1, 16*w)
-        mask_num += 1
 
-        self.layer1 = self._make_layer(block, mask_num, 16*w, num_blocks[0], 
+        self.layer1 = self._make_layer(block, 16*w, num_blocks[0], 
                                      stride=1, mask_params=get_mask_params('conv_1'), mask_rng=mask_rng)
-        mask_num += num_blocks[0] * 3
 
-        self.layer2 = self._make_layer(block, mask_num, 32*w, num_blocks[1], 
+        self.layer2 = self._make_layer(block, 32*w, num_blocks[1], 
                                      stride=2, mask_params=get_mask_params('conv_2'), mask_rng=mask_rng)
-        mask_num += num_blocks[1] * 3
 
-        self.layer3 = self._make_layer(block, mask_num, 64*w, num_blocks[2], 
+        self.layer3 = self._make_layer(block, 64*w, num_blocks[2], 
                                      stride=2, mask_params=get_mask_params('conv_3'), mask_rng=mask_rng)
-        mask_num += num_blocks[2] * 3
 
-        self.linear = NoiseLinear(64*w, num_classes, mask_num=mask_num, mask_rng=mask_rng, **get_mask_params('linear'))
+        self.linear = NoiseLinear(64*w, num_classes, mask_rng=mask_rng, **get_mask_params('linear'))
 
-    def _make_layer(self, block, mask_num, planes, num_blocks, stride, mask_params, mask_rng: torch.Generator):
+    def _make_layer(self, block, planes, num_blocks, stride, mask_params, mask_rng: torch.Generator):
         strides = [stride] + [1] * (num_blocks - 1)
         layers = []
         for stride in strides:
-            layers.append(block(self.in_planes, planes, mask_num, mask_params, stride, mask_rng=mask_rng))
-            mask_num += 3
+            layers.append(block(self.in_planes, planes, mask_params, stride=stride, mask_rng=mask_rng))
             self.in_planes = planes * block.expansion
         return nn.Sequential(*layers)
 
