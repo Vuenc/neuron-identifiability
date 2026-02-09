@@ -232,7 +232,7 @@ def interpolate_models(
         'lambdas': interpolation_factors,
         **{key: metrics[key] if key in metrics else float('nan') for key in metrics_keys},
         'distance': dist,
-        'normalized_distance': normalized_dist,
+        'normalized_distance': float(normalized_dist),
         'num_params': num_params,
         **barrier_heights,
         **linearity_values
