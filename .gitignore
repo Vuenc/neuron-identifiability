@@ -15,3 +15,4 @@ sbatch
 wandb
 /data
 /ffcv
+nohup.out
