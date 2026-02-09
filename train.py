@@ -208,8 +208,9 @@ def setup_data_loaders(cfg: DictConfig):
 def setup_wandb(cfg: DictConfig):
     if not cfg.logging.get('use_wandb', False):
         return None
-    
+
     try:
+        import wandb
         wandb_config = {
             'project': cfg.logging.get('project', 'asymmetric-networks'),
             'name': cfg.logging.get('name', f"{cfg.experiment_name}_multi_model"),
@@ -314,6 +315,20 @@ def train_multi(cfg: DictConfig, init_seeds: list, optimization_seeds: list, mas
                 *zip(*[(cfg, output_dir, init_seeds[model_index], optimization_seeds[model_index], mask_seed, model_index) for model_index in range(num_models)])
             ))
 
+    evaluate_all(cfg, output_dir, mask_seed)
+
+    if wandb:
+        try:
+            wandb.finish()
+            print("Finished wandb")
+        except ImportError:
+            print("Warning: wandb not available")
+
+    print(f"\nMulti-model completed. Results saved to {output_dir}")
+    return model_results
+
+def evaluate_all(cfg: DictConfig, output_dir: Path, mask_seed: int):
+    num_models = cfg.get('num_models', 1)
     cossim_enabled = (cfg.training.cosine_similarity.enabled and 
                      num_models == 2 and 
                      cfg.training.cosine_similarity.save_every is not None)
@@ -345,17 +360,7 @@ def train_multi(cfg: DictConfig, init_seeds: list, optimization_seeds: list, mas
         epochs_to_save = [None] if save_every is None else range(0, cfg.training.num_epochs + 1, save_every)
         for epoch in epochs_to_save:
             interpolation_analysis(cfg, output_dir, data_info, epoch=epoch, mask_seed=mask_seed)
-
-    if wandb:
-        try:
-            wandb.finish()
-            print("Finished wandb")
-        except ImportError:
-            print("Warning: wandb not available")
-
-    print(f"\nMulti-model completed. Results saved to {output_dir}")
-    return model_results
-
+    
 
 def cossim_analysis(cfg: DictConfig, output_dir: Path):
     print("\nComputing cossim...")
@@ -1129,7 +1134,7 @@ def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, m
                                 })
                                 interpolation_table.add_data(
                                     interpolation_factor, model1_index, model2_index, f"{model1_index}_{model2_index}",
-                                    *[interpolation_results[key][i] for key in PER_STEP_METRICS_KEYS]
+                                    *[interpolation_results_pair[key][i] for key in PER_STEP_METRICS_KEYS]
                                 )
 
                             wandb.log({
@@ -1215,6 +1220,9 @@ def main(cfg: DictConfig) -> None:
     if cfg.get('seed', None) is not None:
         set_seed(cfg.seed)
     
+    print("Config:")
+    print(cfg)
+
     init_seeds_raw = cfg.get('init_seed', None)
     if init_seeds_raw is None:
         init_seeds = [random.randint(0, 2**32 - 1) for _ in range(cfg.num_models)]
