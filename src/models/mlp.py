@@ -11,6 +11,7 @@ import math
 from ..core.registry import register
 from .normalization import total_output_variances_init, setup_normalization
 from .activation import setup_activation
+from .common import apply_n_mul_to_mask_params
 
 
 class AsymSwiGLU(nn.Module):
@@ -413,7 +414,7 @@ class SigmaMLP(nn.Module):
 
 
 def _initialize_from_asym_mlp(symmetry, input_dim, hidden_dim, output_dim, num_layers,
-                              mask_params, norm, elementwise_affine, activation, mask_seed: int | None):
+                              mask_params, norm, elementwise_affine, activation, mask_seed: int | None, n_mul: float=1.):
     """Initialize a symmetry type 0 (standard) MLP with weights from symmetry type 1 or 3 (W-Asym or Noise-Asym).
     
     This creates an asym model using create_mlp, runs it through forward to extract effective weights,
@@ -437,7 +438,7 @@ def _initialize_from_asym_mlp(symmetry, input_dim, hidden_dim, output_dim, num_l
     asym_model = create_mlp(symmetry=symmetry, input_dim=input_dim, hidden_dim=hidden_dim, 
                            output_dim=output_dim, num_layers=num_layers, mask_params=mask_params,
                            norm=norm, elementwise_affine=elementwise_affine, activation=activation,
-                           asym_init_only=False, mask_seed=mask_seed)
+                           asym_init_only=False, mask_seed=mask_seed, n_mul=n_mul)
     
     # Create standard model
     standard_model = create_mlp(symmetry=0, input_dim=input_dim, hidden_dim=hidden_dim,
@@ -560,7 +561,7 @@ def _initialize_from_asym_mlp(symmetry, input_dim, hidden_dim, output_dim, num_l
 
 
 def create_mlp(symmetry, input_dim, hidden_dim, output_dim, num_layers, mask_seed=None,
-               mask_params=None, norm='layer', elementwise_affine=True, activation=None, asym_init_only=False):
+               mask_params=None, norm='layer', elementwise_affine=True, activation=None, asym_init_only=False, n_mul: float=1.):
     """Create MLP based on symmetry type.
     
     Args:
@@ -578,7 +579,13 @@ def create_mlp(symmetry, input_dim, hidden_dim, output_dim, num_layers, mask_see
     # Handle asym_init_only: use asym model only for initialization, create standard model
     if asym_init_only and symmetry in [1, 3]:
         return _initialize_from_asym_mlp(symmetry, input_dim, hidden_dim, output_dim, num_layers,
-                                       mask_params, norm, elementwise_affine, activation, mask_seed=mask_seed)
+                                       mask_params, norm, elementwise_affine, activation, mask_seed=mask_seed, n_mul=n_mul)
+    
+    # Apply n_mul to all num_fixed values in mask_params
+    if mask_params is not None and n_mul != 1.0:
+        print(f"Applying n_mul={n_mul} to mask_params")
+        mask_params = apply_n_mul_to_mask_params(mask_params, n_mul)
+        print(f"After applying n_mul, sample values: {mask_params.get('linear_mask_params_0', {}).get('num_fixed', 'N/A')}")
     
     if symmetry == 0:
         activation = activation or 'relu'

@@ -76,6 +76,7 @@ def create_model(cfg: DictConfig, mask_seed, device=None):
             elementwise_affine=cfg.model.get('elementwise_affine', True),
             activation=cfg.model.get('activation', None),
             mask_seed=mask_seed,
+            n_mul=cfg.model.get('n_mul', 1.0),
             asym_init_only=cfg.model.get('asym_init_only', False),
         )
     elif cfg.model.name == 'resnet_cifar':
