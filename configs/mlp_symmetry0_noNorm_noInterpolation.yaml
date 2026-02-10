@@ -1,0 +1,30 @@
+defaults:
+  - config  # inherits from base config.yaml
+  - override logging: wandb
+  - override dataset: mnist
+  - override model: null
+  - _self_  # keeps specific-config overrides last
+model:
+  # copied verbatim from model/mlp_mnist.yaml but with per-layer mask constant overrides removed.
+  _target_: src.models.mlp.create_mlp
+  name: mlp_mnist
+
+  input_dim: 784
+  hidden_dim: 512
+  output_dim: 10
+  num_layers: 4
+  norm: null
+  elementwise_affine: true
+  activation: gelu
+
+  symmetry: 0  # 0: Standard, 1: W-Asym, 2: Sigma-Asym
+training:
+  num_epochs: 100
+  save_every: 1
+  cosine_similarity:
+    enabled: false
+  functional_similarity:
+    enabled: false
+interpolation:
+  enabled: false
+num_models: 16
