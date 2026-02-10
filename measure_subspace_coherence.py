@@ -6,7 +6,7 @@ import train
 import src.utils.rebasin.subspace_coherence
 import numpy as np
 from contextlib import contextmanager
-from .checkpoint_directories import checkpoint_directories_by_architecture
+from checkpoint_directories import checkpoint_directories_by_architecture
 
 @contextmanager
 def suppress_prints(suppress=True):

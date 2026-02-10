@@ -10,7 +10,7 @@ import collections
 from typing import DefaultDict, Dict, List, NamedTuple
 import src.utils.rebasin
 from src.utils.rebasin.common import PermutationSpec, HookMode, LayerName
-from .checkpoint_directories import checkpoint_directories_by_architecture
+from checkpoint_directories import checkpoint_directories_by_architecture
 
 class ActivationPatternResult(NamedTuple):
   agreement_ratio: float

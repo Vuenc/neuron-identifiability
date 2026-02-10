@@ -15,7 +15,7 @@ from src.models.activation import setup_activation
 import json
 from src.utils.record_activations import record_activations, RecordInput
 import argparse
-from .checkpoint_directories import checkpoint_directories_by_architecture
+from checkpoint_directories import checkpoint_directories_by_architecture
 
 type PermutationName = str
 

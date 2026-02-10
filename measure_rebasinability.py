@@ -7,7 +7,7 @@ import src.utils.rebasin.activation_matching
 from src.utils.rebasin import ActivationCorrelationMode
 import numpy as np
 from contextlib import contextmanager
-from .checkpoint_directories import checkpoint_directories_by_architecture
+from checkpoint_directories import checkpoint_directories_by_architecture
 
 @contextmanager
 def suppress_prints(suppress=True):
