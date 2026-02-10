@@ -16,3 +16,4 @@ wandb
 /data
 /ffcv
 nohup.out
+plots

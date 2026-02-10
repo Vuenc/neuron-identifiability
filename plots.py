@@ -262,6 +262,7 @@ def make_lmc_plots_resnet(outputs_path="outputs", save_plots=True, display=True)
             fig.write_html(f"plots/lmc-resnet-{mode}.html")
 
     if display:
+        next(iter(plots.values())).show()
         return plot_grid([[p] for p in plots.values()])
     return plots
 
@@ -675,7 +676,7 @@ def make_activation_matching_plots_epoch_sweep(
     if display:
         next(iter(epoch_sweep_plots_by_layer_and_run.values())).show()
         return plot_grid(
-            [[p] for _, p in zip(range(2), epoch_sweep_plots_by_layer_and_run.values())]
+            [[p] for p in epoch_sweep_plots_by_layer_and_run.values()]
         )
 
 
