@@ -1,0 +1,11 @@
+# @package dataset
+name: mnist-coherence
+data_dir: ./data
+batch_size: 64
+val_split: 0.1
+num_workers: 4
+pin_memory: true
+enable_ffcv: false
+coherence_rotation:
+  target_explained_variance_ratio: 0.9
+  target_subspace_coherence: 0.111 # just above the MNIST minimum of 87/784 = 0.1109

@@ -63,7 +63,7 @@ MNIST_STD = (0.3081)
 
 
 @register('dataset', 'mnist')
-def create_mnist_dataset(data_dir='./data', train=True, transform=None):
+def create_mnist_dataset(cfg_dataset, train=True, transform=None):
     assert import_torchvision()
     if transform is None:
         transform = torchvision.transforms.Compose([
@@ -71,11 +71,24 @@ def create_mnist_dataset(data_dir='./data', train=True, transform=None):
             torchvision.transforms.Normalize(MNIST_MEAN, MNIST_STD)
         ])
     
-    return torchvision.datasets.MNIST(root=data_dir, train=train, transform=transform, download=True)
+    return torchvision.datasets.MNIST(root=cfg_dataset.data_dir, train=train, transform=transform, download=True)
+
+@register('dataset', 'mnist-coherence')
+def create_mnist_coherence_rotated_dataset(cfg_dataset, train=True, transform=None):
+    mnist_train_dataset = create_mnist_dataset(cfg_dataset=cfg_dataset, train=True, transform=transform)
+    import src.utils.rebasin.subspace_coherence
+    coherence_transform =  src.utils.rebasin.subspace_coherence.SubspaceCoherenceRotationTransform(
+        dataset=mnist_train_dataset,
+        target_explained_variance_ratio=cfg_dataset.coherence_rotation.target_explained_variance_ratio,
+        target_subspace_coherence=cfg_dataset.coherence_rotation.target_subspace_coherence,
+    )
+    mnist_dataset = mnist_train_dataset if train else create_mnist_dataset(cfg_dataset=cfg_dataset, train=train, transform=transform)
+    mnist_dataset.transform = torchvision.transforms.Compose([mnist_dataset.transform, coherence_transform])
+    return mnist_dataset
 
 
 @register('dataset', 'cifar10')
-def create_cifar10_dataset(data_dir='./data', train=True, transform=None):
+def create_cifar10_dataset(cfg_dataset, train=True, transform=None):
     assert import_torchvision()
     if transform is None:
         if train:
@@ -91,7 +104,7 @@ def create_cifar10_dataset(data_dir='./data', train=True, transform=None):
                 torchvision.transforms.Normalize(mean=CIFAR10_MEAN, std=CIFAR10_STD)
             ])
     
-    return torchvision.datasets.CIFAR10(root=data_dir, train=train, transform=transform, download=True)
+    return torchvision.datasets.CIFAR10(root=cfg_dataset.data_dir, train=train, transform=transform, download=True)
 
 
 def create_ffcv_dataloader_cifar(data_path, mean: Tuple[float, float, float], std: Tuple[float, float, float], train=True, batch_size=32, device="cuda:0", num_workers=-1):
@@ -129,7 +142,7 @@ def create_ffcv_dataloader_cifar100(data_path="ffcv/cifar10_train.beton", train=
 
 
 @register('dataset', 'cifar100')
-def create_cifar100_dataset(data_dir='./data', train=True, transform=None):
+def create_cifar100_dataset(cfg_dataset, train=True, transform=None):
     if transform is None:
         if train:
             transform = torchvision.transforms.Compose([
@@ -144,31 +157,31 @@ def create_cifar100_dataset(data_dir='./data', train=True, transform=None):
                 torchvision.transforms.Normalize(mean=CIFAR100_MEAN, std=CIFAR100_STD)
             ])
     
-    return torchvision.datasets.CIFAR100(root=data_dir, train=train, transform=transform, download=True)
+    return torchvision.datasets.CIFAR100(root=cfg_dataset.data_dir, train=train, transform=transform, download=True)
 
 
 @register('dataset', 'arxiv')
-def create_arxiv_dataset(data_dir='./data'):
+def create_arxiv_dataset(cfg_dataset):
     if not import_ogb_pyg():
         raise ImportError("torch_geometric and ogb are required for ArXiv dataset")
     
     dataset = ogb.nodeproppred.PygNodePropPredDataset(
         name='ogbn-arxiv', 
-        root=data_dir,
+        root=cfg_dataset.data_dir,
         transform=torch_geometric.transforms.Compose([torch_geometric.transforms.ToUndirected(), torch_geometric.transforms.ToSparseTensor()])
     )
     return dataset
 
 
-def create_dataset(dataset_name, data_dir='./data', train=True, transform=None, **kwargs):
+def create_dataset(cfg_dataset, train=True, transform=None, **kwargs):
     from ..core.registry import build_component
     
-    if dataset_name in ['mnist', 'cifar10', 'cifar100']:
-        return build_component('dataset', dataset_name, data_dir=data_dir, train=train, transform=transform)
-    elif dataset_name == 'arxiv':
-        return build_component('dataset', dataset_name, data_dir=data_dir)
+    if cfg_dataset.name in ['mnist', 'cifar10', 'cifar100', "mnist-coherence"]:
+        return build_component('dataset', cfg_dataset.name, cfg_dataset=cfg_dataset, train=train, transform=transform)
+    elif cfg_dataset.name == 'arxiv':
+        return build_component('dataset', cfg_dataset.name, cfg_dataset=cfg_dataset)
     else:
-        raise ValueError(f"Unknown dataset: {dataset_name}")
+        raise ValueError(f"Unknown dataset: {cfg_dataset.name}")
 
 def create_dataloader(dataset, batch_size=32, shuffle=True, num_workers=4, 
                      pin_memory=True, drop_last=False, **kwargs):

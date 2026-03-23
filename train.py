@@ -153,9 +153,9 @@ def setup_data_loaders(cfg: DictConfig):
             'val_loader': val_loader,
             'test_loader': test_loader,
         }
-    elif cfg.dataset.name in ['mnist', 'cifar10', 'cifar100']:
-        train_dataset = create_dataset(cfg.dataset.name, cfg.dataset.data_dir, train=True)
-        test_dataset = create_dataset(cfg.dataset.name, cfg.dataset.data_dir, train=False)
+    elif cfg.dataset.name in ['mnist', 'cifar10', 'cifar100', 'mnist-coherence']:
+        train_dataset = create_dataset(cfg_dataset=cfg.dataset, train=True)
+        test_dataset = create_dataset(cfg_dataset=cfg.dataset, train=False)
         train_dataset, val_dataset = create_train_val_test_split(
             train_dataset, val_split=cfg.dataset.val_split, test_split=0.0, seed=42
         )[0:2]
@@ -189,7 +189,7 @@ def setup_data_loaders(cfg: DictConfig):
             'test_dataset': test_dataset
         }        
     elif cfg.dataset.name == 'arxiv':
-        dataset = create_dataset(cfg.dataset.name, cfg.dataset.data_dir)
+        dataset = create_dataset(cfg_dataset=cfg.dataset)
         data = dataset[0]
         data = data.to(cfg.device)
         split_idx = dataset.get_idx_split()
