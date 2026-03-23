@@ -10,6 +10,8 @@ class ActivationCorrelationMode(str, enum.Enum):
   DotProduct = "dot_product" # the dot product as described in Git Rebasin
   PearsonCorrelation = "pearson_correlation" # the Pearson correlation between activations
   PearsonCorrelationWithZeroForConstant = "pearson_correlation_with_zero_for_constant" # the Pearson correlation between activations, but if a hidden dimension is constant, it's correlation with all other is replaced by 0 (not actually the correct correlation)
+  PearsonUncorrelatedness = "pearson_uncorrelatedness" # 1 - abs(ρ), where ρ is the Pearson correlation
+  PearsonUncorrelatednessWithOneForConstant = "pearson_uncorrelatedness_with_one_for_constant" # the Pearson correlation between activations, but if a hidden dimension is constant, it's correlation with all other is replaced by 0 (not actually the correct correlation)
 
 class PermutationSpec(NamedTuple):
   perm_to_axes: dict

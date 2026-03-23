@@ -14,6 +14,10 @@ RecordInput, RecordOutput = HookMode.RecordInput, HookMode.RecordOutput
 type ActivationRecordingPoint = Tuple[LayerName, HookMode]
 type RecordedActivations = Dict[ActivationRecordingPoint, List[torch.Tensor]]
 
+# Input/Output recording points: rely on the behavior that the root module occurs with an empty string in module.named_modules()
+MODEL_INPUT_RECORDING_POINT: ActivationRecordingPoint = ("", HookMode.RecordInput)
+MODEL_OUTPUT_RECORDING_POINT: ActivationRecordingPoint = ("", HookMode.RecordOutput)
+
 def record_activations(
     activation_recording_points: List[ActivationRecordingPoint],
     models: List[torch.nn.Module],
@@ -41,6 +45,9 @@ def record_activations(
                 forward_hook = record_output_hook
             else:
                 raise ValueError(f"Unsupported value for hook_mode: {hook_mode}")
+            if layer_name == "":
+                # Assert assumption underlying MODEL_INPUT_RECORDING_POINT and MODEL_OUTPUT_RECORDING_POINT: empty string maps to model itself
+                assert named_modules[""] == model
             handle = named_modules[layer_name].register_forward_hook(forward_hook)
             registered_hooks.append(handle)
 
@@ -49,9 +56,7 @@ def record_activations(
         # Only iterate the data loader once, so the models see the data in the same order
         for input, _ in data_loader:
             for model in models:
-                model.forward(input.to(device))
-            # import psutil
-            # print(f"Available RAM: {psutil.virtual_memory().available / 1e9:.1f} / {psutil.virtual_memory().total / 1e9:.1f} GB")
+                model(input.to(device))
     for handle in registered_hooks:
         handle.remove()
     return [dict(recorded_activations) for recorded_activations in recorded_activations_by_model]
