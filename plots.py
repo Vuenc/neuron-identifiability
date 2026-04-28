@@ -29,6 +29,60 @@ DEFAULT_OUTPUTS_PATH = (
 FILE_EXTENSION = "pdf"
 
 
+# Helper functions style_figure and plot_grid for falling back to plotly in interactive notebooks. Don't delete!
+def style_figure(fig):
+    fig.update_layout(
+        template="simple_white",
+        font=dict(color="black", family="Deja Vu Math TeX Gyre"),
+    )
+    fig.update_xaxes(
+        showgrid=True,
+        gridcolor="lightgray",
+        zeroline=False,
+        showline=True,
+        linewidth=1,
+        linecolor="black",
+        ticks="outside",
+        ticklen=5,
+    )
+    fig.update_yaxes(
+        showgrid=True,
+        gridcolor="lightgray",
+        zeroline=False,
+        showline=True,
+        linewidth=1,
+        linecolor="black",
+        ticks="outside",
+        ticklen=5,
+    )
+
+
+def plot_grid(figures, width=500, height=300):
+    """
+    Display figures in a grid with complete separation.
+    """
+    import plotly.graph_objects as go
+    from IPython.display import display
+    import ipywidgets as widgets
+    rows = []
+
+    for row_figs in figures:
+        fig_widgets = []
+        for fig in row_figs:
+            if fig is None:
+                continue
+
+            # Create FigureWidget from existing figure's data and layout
+            fw = go.FigureWidget(data=fig.data, layout=fig.layout)
+            fw.update_layout(width=width, height=height)
+            fig_widgets.append(fw)
+
+        rows.append(widgets.HBox(fig_widgets))
+
+    grid = widgets.VBox(rows)
+    display(grid)
+
+
 def _apply_plot_style() -> None:
     plt.rcParams.update(
         {
