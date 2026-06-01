@@ -271,7 +271,8 @@ class Trainer:
             if self.scheduler is not None:
                 self.scheduler.step()
             
-            if epoch % val_every == 0 or epoch == num_epochs - 1:
+            val_metrics = {}
+            if val_every != 0 and (epoch % val_every == 0 or epoch == num_epochs - 1):
                 val_metrics = self.evaluate(self.val_loader, 'val')
                 history['val_loss'].append(val_metrics['val_loss'])
                 history['val_accuracy'].append(val_metrics['val_accuracy'])
@@ -299,6 +300,11 @@ class Trainer:
                     if patience_counter >= early_stopping.get('patience', 10):
                         print(f"Early stopping at epoch {epoch+1}")
                         break
+            else:
+                print(f'Epoch {epoch+1}/{num_epochs}: '
+                    f'Train Loss: {train_metrics["train_loss"]:.4f},'
+                )
+
             
             if save_every is not None and (epoch + 1) % save_every == 0 and \
                     save_path is not None:
