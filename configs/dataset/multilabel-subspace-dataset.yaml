@@ -1,0 +1,19 @@
+# @package _global_
+model:
+  num_classes: 100
+
+dataset:
+  name: multilabel-subspace-dataset
+  batch_size: 128
+  val_split: 0.1
+  num_workers: 4
+  pin_memory: true
+  enable_ffcv: false
+  multilabel_subspace_dataset:
+    num_samples_train: 50000
+    num_samples_test: 10000
+    num_binary_labels: 50
+    d_ambient: 512
+    data_seed_train: 234
+    data_seed_test: 567
+    projection_seed: 890

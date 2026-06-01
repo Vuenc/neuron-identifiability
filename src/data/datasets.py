@@ -2,6 +2,7 @@ from typing import List, Tuple
 import torch
 from torch.utils.data import DataLoader, random_split
 from ..core.registry import register
+import src.data.synthetic
 
 from typing import TYPE_CHECKING
 
@@ -172,7 +173,6 @@ def create_arxiv_dataset(cfg_dataset):
     )
     return dataset
 
-
 def create_dataset(cfg_dataset, train=True, transform=None, **kwargs):
     from ..core.registry import build_component
     
@@ -180,6 +180,8 @@ def create_dataset(cfg_dataset, train=True, transform=None, **kwargs):
         return build_component('dataset', cfg_dataset.name, cfg_dataset=cfg_dataset, train=train, transform=transform)
     elif cfg_dataset.name == 'arxiv':
         return build_component('dataset', cfg_dataset.name, cfg_dataset=cfg_dataset)
+    elif cfg_dataset.name in ['gaussian-subspace-dataset', 'multilabel-subspace-dataset', 'parity-subspace-dataset']:
+        return build_component('dataset', cfg_dataset.name, cfg_dataset=cfg_dataset, train=train)
     else:
         raise ValueError(f"Unknown dataset: {cfg_dataset.name}")
 
@@ -208,3 +210,4 @@ def create_train_val_test_split(dataset, val_split=0.1, test_split=0.1, seed=42)
     )
     
     return train_dataset, val_dataset, test_dataset
+

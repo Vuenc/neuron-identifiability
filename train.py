@@ -153,7 +153,7 @@ def setup_data_loaders(cfg: DictConfig):
             'val_loader': val_loader,
             'test_loader': test_loader,
         }
-    elif cfg.dataset.name in ['mnist', 'cifar10', 'cifar100', 'mnist-coherence']:
+    elif cfg.dataset.name in ['mnist', 'cifar10', 'cifar100', 'mnist-coherence', 'gaussian-subspace-dataset', 'multilabel-subspace-dataset', 'parity-subspace-dataset']:
         train_dataset = create_dataset(cfg_dataset=cfg.dataset, train=True)
         test_dataset = create_dataset(cfg_dataset=cfg.dataset, train=False)
         train_dataset, val_dataset = create_train_val_test_split(
@@ -1213,6 +1213,8 @@ def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, m
         save_interpolation_results(interpolation_results, output_dir)
     
     return interpolation_results
+
+OmegaConf.register_new_resolver("eval", eval)
 
 @hydra.main(version_base=None, config_path="configs", config_name="config")
 def main(cfg: DictConfig) -> None:

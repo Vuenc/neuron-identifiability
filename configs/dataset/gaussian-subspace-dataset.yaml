@@ -1,0 +1,21 @@
+# @package _global_
+model:
+  num_classes: 100
+
+dataset:
+  name: gaussian-subspace-dataset
+  batch_size: 128
+  val_split: 0.1
+  num_workers: 4
+  pin_memory: true
+  enable_ffcv: false
+  gaussian_subspace_dataset:
+    num_samples_train: 50000
+    num_samples_test: 10000
+    num_classes: 20
+    d_intrinsic: 128
+    d_ambient: 512
+    class_separation: 0.3
+    sampling_seed_train: 123
+    sampling_seed_test: 456
+    structure_seed: 789
