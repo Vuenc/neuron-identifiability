@@ -81,9 +81,12 @@ class SparseLinear(nn.Module):
                 fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weight)
                 bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
                 nn.init.uniform_(self.bias, -bound, bound)
-    
+
+    def effective_weight(self):
+        return self.weight * self.mask.detach() + (1 - self.mask.detach()) * self.mask_constant * self.normal_mask
+
     def forward(self, x):
-        return F.linear(x, self.weight * self.mask.detach() + (1 - self.mask.detach()) * self.mask_constant * self.normal_mask, self.bias)
+        return F.linear(x, self.effective_weight(), self.bias)
 
 
 class NoiseLinear(nn.Module):
@@ -110,10 +113,12 @@ class NoiseLinear(nn.Module):
                 bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
                 nn.init.uniform_(self.bias, -bound, bound)
     
+    def effective_weight(self):
+        return self.weight + self.mask_constant * self.noise
+
     def forward(self, x):
         # Add scaled fixed noise to weights during forward pass
-        effective_weight = self.weight + self.mask_constant * self.noise
-        return F.linear(x, effective_weight, self.bias)
+        return F.linear(x, self.effective_weight(), self.bias)
 
 
 @register('model', 'mlp_standard')
