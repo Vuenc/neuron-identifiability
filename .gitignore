@@ -17,3 +17,7 @@ wandb
 /ffcv
 nohup.out
 plots
+.internal
+plots.ipynb
+measure_subspace_coherence_and_anisotropy.ipynb
+measure_realization_cost.ipynb
