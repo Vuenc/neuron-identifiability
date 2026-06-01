@@ -7,7 +7,7 @@ import os
 import re
 import tempfile
 from pathlib import Path
-from typing import List
+from typing import List, Tuple
 import polars as pl
 import hydra
 
@@ -676,7 +676,6 @@ def make_activation_matching_plots_epoch_sweep(
 def load_config(directory_or_checkpoint_path: str):
     path = Path(directory_or_checkpoint_path)
     config_dir = path.parent if path.is_file() else path
-    
     with hydra.initialize_config_dir(config_dir=str(config_dir.absolute()), version_base=None):
         return hydra.compose(config_name="config")
 
@@ -694,7 +693,7 @@ def load_df_ridge_mahalanobis(PARQUET_PATH_RIDGE, PARQUET_PATH_MAHALANOBIS, MAP_
         .sort(*(groups := ["layer", "run_key", "beta"]), "id1", "id2")  # Sort the entire dataset into stacked matrices
         .with_columns(
             transposition_cost=(
-                (c := pl.col(cost := "objective_weight_regularization")) 
+                (c := pl.col(cost := "objective_weight_regularization"))
                 + c.sort_by(*groups, "id2", "id1")  # Transpose within each group
                 - (d := pl.when(pl.col("id1") == pl.col("id2")).then(c)).max().over(*groups, "id1") # Broadcast diag across row per group
                 - d.max().over(*groups, "id2") # Broadcast diag across col per group
@@ -759,6 +758,7 @@ def load_data_gmm():
 def load_data_mnist():
     df_mnist: pl.DataFrame = load_df_ridge_mahalanobis(
         "outputs/ridge-regression-realization-costs-mnist-batchnorm.parquet",
+        # "outputs/realization-costs-mahalanobis-mnist-batchnorm-explainedvariance_0.8.parquet",
         "outputs/realization-costs-mahalanobis-mnist-batchnorm.parquet",
         {val.removesuffix("/"): key for key, val in checkpoint_directories.checkpoint_directories_by_architecture["mlp-batchnorm"].items()}
     )
@@ -768,91 +768,122 @@ def load_data_mnist():
 def filter_neuron_cost_df(df, run_key, layer, beta=None):
     return (
         (df_tmp := df.filter(
-            *([pl.col("run_key") == run_key, pl.col("layer") == layer] + ([pl.col("beta") == beta] if beta is not None else []))
-        )).sort("id1", "id2")
+            *(
+                ([pl.col("run_key").is_in(run_key if isinstance(run_key, list) else [run_key])] if run_key is not None else [])
+                  + ([pl.col("layer").is_in(layer if isinstance(layer, list) else [layer])] if layer is not None else [])
+                  + ([pl.col("beta").is_in(beta if isinstance(beta, list) else [beta])] if beta is not None else [])
+        ))).sort("id1", "id2")
     )
 
 def extract_cost_matrix_from_df(df, run_key, layer, beta=None, cost_name="transposition_cost_squared_mahalanobis"):
     df_tmp = filter_neuron_cost_df(df, run_key, layer, beta)
     return df_tmp[cost_name].to_numpy().reshape(m := (df_tmp["id1"].max() + 1), m)
 
+def rgb_from_values(x, pcmap):
+    """
+    x: scalar/array of values
+    pcmap: [(value, color), ...], color = RGB tuple in [0,1] or any matplotlib color
+    """
+    v, c = zip(*sorted(pcmap))
+    v = np.asarray(v, float)
+    c = np.asarray([matplotlib.colors.to_rgb(ci) for ci in c], float)
 
-def plot_neuron_pair_costs(data, out_filename=None, show_y_axis=True, show_x_axis=True, show_colorbar=True, colorbar_ticker_base=None, red_threshold=None):
-    vmax = max(1, np.nanmax(data))
-    vmin = min(-vmax*0.05, np.nanmin(data))
-    
-    # Fallback in case the data is completely constant
-    if vmax <= vmin:
-        vmax = vmin + 0.1
-        
-    total = vmax - vmin
+    x = np.asarray(x, float)
+    y = np.empty(x.shape + (3,), float)
 
-    # Safe normalizer: applies the boundary offset FIRST, then strictly clips.
-    # This guarantees we never spit out a value like 1.00001.
-    def get_x(val, offset=0.0):
-        norm = (val - vmin) / total
-        return np.clip(norm + offset, 0.0, 1.0)
+    for k in range(3):
+        y[..., k] = np.interp(x, v, c[:, k])
 
-    yellow_start = min(0-(vmax-vmin)/1000, vmin*0.05)
+    return y
 
-    red_threshold = red_threshold if red_threshold is not None else 0.3
-    red_threshold_default = 0.3
-    factor = red_threshold/red_threshold_default
-    print(red_threshold, get_x(-10*factor), get_x(50.0*factor))
 
-    # The exact sequence of colors mapped to data milestones
-    raw_stops = [
-        (min(0, get_x(-10*factor)),            "#A2EF09"), # Green-yellow base
-        (get_x(yellow_start, -1e-5),    "#C9D009"),
-        (get_x(yellow_start),           "#ff0000"), # Transition to red
-        (get_x(0.0),             "#ff0000"), # Hold pure red up to exactly 0.0
-        (get_x(0.0, 1e-5),       "#ff0000"), # Immediate jump to purple > 0.0
-        (get_x(3.0/100*factor),             "#bb0044"), # Dark Red
-        (get_x(4.0/100*factor),             "#3b528b"), # Blue
-        (get_x(25.0*factor),             "#2b3260"), # Darker blue at 25
-        (max(1, get_x(50.0*factor)),  "#12124b")  # Dark blue at 50 
+def plot_matrix_consistent_colormap(ax, data, pcmap, clim=None, show_colorbar=True, aspect="equal", interpolation="none", colorbar_ticker_base=None, colorbar_scientific_notation=False):
+    """
+    data: 2D numeric array
+    pcmap: "value space to color" colormap [(value, color), ...]
+    clim: colorbar range shown for this plot; colors still use global pcmap
+    """
+    rgb = rgb_from_values(data, pcmap)
+
+    im = ax.imshow(rgb, interpolation=interpolation, aspect=aspect)
+
+    if show_colorbar:
+        lo, hi = clim if clim is not None else (np.nanmin(data), np.nanmax(data))
+        vals = np.linspace(lo, hi, 256)
+        bar = rgb_from_values(vals, pcmap).reshape(256, 1, 3)
+
+        cax = ax.inset_axes([1.03, 0.0, 0.04, 1.0])
+        cax.imshow(bar, origin="lower", aspect="auto",
+                   extent=[0, 1, lo, hi], interpolation="nearest")
+        cax.set_xticks([])
+        cax.yaxis.tick_right()
+        cax.set_ylim(lo, hi)
+        if colorbar_ticker_base is not None:
+            cax.yaxis.set_major_locator(MultipleLocator(colorbar_ticker_base))
+
+        if colorbar_scientific_notation:
+            def short_sci(x, pos):
+                if x == 0:
+                    return "0"
+                mant, exp = f"{x:.0e}".split("e")
+                return f"{mant}e{int(exp)}"
+
+            if colorbar_scientific_notation:
+                cax.yaxis.set_major_formatter(FuncFormatter(short_sci))
+
+    return im
+
+
+def plot_neuron_pair_costs(
+        data: np.ndarray, out_filename=None, show_y_axis=True, show_x_axis=True, show_colorbar=True, colorbar_ticker_base=None,
+        colorbar_min_limits: Tuple[int, int] | None=None
+):
+    cmap = [
+        (-10, "#A2EF09"),
+        (-0.5, "#FAFE04"),
+        (-1e-5, "#C9D009"),
+        (-1e-7, "#ff5500"),
+        (1e-5, "#ff0000"),
+        (.5, "#bb0044"),
+        (2, "#8f3757"),
+        (3, "#3b528b"),
+        (25.0, "#2b3260"),
+        (50.0, "#203050"),
+        (500.0, "#1A2840"),
+        (1000.0, "#182438"),
     ]
 
-    # Enforce strict monotonicity (x1 < x2 < x3) without exceeding 1.0.
-    # This acts as a firewall to prevent Matplotlib from defaulting to yellow.
-    stops = []
-    last_x = -1.0
-    for x, color in raw_stops:
-        if x <= last_x:
-            x = last_x + 1e-9 # Micro-bump to keep Matplotlib's interpolator happy
-        
-        # Drop any points that the offset pushed beyond the colormap limits
-        if x <= 1.0:
-            stops.append((x, color))
-            last_x = x
-            
-    # Matplotlib colormaps must end exactly at 1.0
-    if stops[-1][0] < 1.0:
-        stops.append((1.0, stops[-1][1]))
-
-    cmap = matplotlib.colors.LinearSegmentedColormap.from_list("", stops)
-
     import ipywidgets as widgets
-    plot_output = widgets.Output()
-    with plot_output:
+    with (plot_output := widgets.Output()):
         fig, ax = plt.subplots(figsize=(1.8+0.6*show_colorbar+0.1*show_y_axis, 1.8-0.137*(not show_x_axis)), dpi=300)
-        im = ax.imshow(data, cmap=cmap, norm=matplotlib.colors.Normalize(vmin=vmin, vmax=vmax), aspect="equal", interpolation='none')
+        # im = ax.imshow(data, cmap=cmap, norm=matplotlib.colors.Normalize(vmin=vmin, vmax=vmax), aspect="equal", interpolation='none')
+        # color_bar_range = (min(data.min(), -0.12), max(data.max(), 0.15))
+        color_bar_range = (min(data.min(), 0), max(data.max(), 0))
+        if colorbar_min_limits is not None:
+            # Adjust color bar range to min/max of whole row that will share the same color bar
+            color_bar_range = (
+                min(color_bar_range[0], colorbar_min_limits[0]),
+                max(color_bar_range[1], colorbar_min_limits[1])
+            )
+        color_bar_range = (min(color_bar_range[0], -(color_bar_range[1])/4.5), max(color_bar_range[1], (-color_bar_range[0])/5))
+        im = plot_matrix_consistent_colormap(
+            ax, data, cmap,
+            clim=color_bar_range,
+            show_colorbar=show_colorbar,
+            colorbar_ticker_base=colorbar_ticker_base,
+            colorbar_scientific_notation=abs(color_bar_range[1]) < 1e-1
+        )
 
         ax.set_xticks([])
         ax.set_yticks([])
-        ax.set_xlabel("neuron j")
-        ax.set_ylabel("neuron i")
+        ax.set_xlabel("neuron $j$", fontname="DejaVu Serif", fontsize=7)
+        ax.set_ylabel("neuron $i$", fontname="DejaVu Serif", fontsize=7)
         ax.xaxis.set_label_position("top")
 
-        if show_colorbar:
-            cbar = fig.colorbar(im, ax=ax, pad=0.02)
-            if colorbar_ticker_base is not None:
-                cbar.ax.yaxis.set_major_locator(MultipleLocator(colorbar_ticker_base))
         if not show_y_axis:
             ax.get_yaxis().set_visible(False)
         if not show_x_axis:
             ax.get_xaxis().set_visible(False)
-        
         plt.tight_layout()
         if out_filename is not None:
             fig.savefig(out_filename, format="pdf", bbox_inches="tight")
@@ -860,13 +891,14 @@ def plot_neuron_pair_costs(data, out_filename=None, show_y_axis=True, show_x_axi
     return plot_output
 
 
-def plot_and_save_neuron_pair_cost(df, run_key, layer, beta, cost_name, **kwargs):
+def plot_and_save_neuron_pair_cost(df, run_key, layer, beta, cost_name, df_same_colorbar_data=None, **kwargs):
     output_file = lambda run_key, layer, beta, cost_name: f"plots/neuron-pair-cost_{run_key}_{layer}_{beta}_{cost_name}.pdf"
-    red_threshold = filter_neuron_cost_df(df, run_key, layer, beta).filter(pl.col("i") == pl.col("j"))[cost_name.replace("transposition", "realization")].median()
+    # red_threshold = filter_neuron_cost_df(df, run_key, layer, beta).filter(pl.col("i") == pl.col("j"))[cost_name.replace("transposition", "realization")].median()
+    red_threshold = None
     return plot_neuron_pair_costs(
         extract_cost_matrix_from_df(df, run_key, layer, beta, cost_name),
         output_file(run_key, layer, beta, cost_name),
-        red_threshold=red_threshold,
+        colorbar_min_limits=(df_same_colorbar_data[cost_name].min(), df_same_colorbar_data[cost_name].max()) if df_same_colorbar_data is not None else None,
         **kwargs
     )
 
@@ -878,11 +910,18 @@ def make_neuron_pair_cost_matrix_plots(outputs_path: str = DEFAULT_OUTPUTS_PATH)
             plot_and_save_neuron_pair_cost(df_gmm, f"d-intr2_hidden-dim64_symmetry1_kappa{kappa}", "lins.0", 0.01, cost_name, show_colorbar=False, show_x_axis=(show_x_axis := (kappa=="0.0"))),
             plot_and_save_neuron_pair_cost(df_gmm, f"d-intr8_hidden-dim64_symmetry1_kappa{kappa}", "lins.0", 0.01, cost_name, show_y_axis=False, show_colorbar=False, show_x_axis=show_x_axis),
             plot_and_save_neuron_pair_cost(df_gmm, f"d-intr32_hidden-dim64_symmetry1_kappa{kappa}", "lins.0", 0.01, cost_name, show_y_axis=False, show_x_axis=show_x_axis,
-                                           colorbar_ticker_base=(0.4 if kappa == "0.0" else None) # manual adjustment of colorbar ticker spacing
+                                           df_same_colorbar_data=df_same_colorbar_data_gmm,
+                                           colorbar_ticker_base=(0.2 if kappa == "0.0" else None) # manual adjustment of colorbar ticker spacing
             )
         ]
         for kappa in ["0.0", "1.0"]
-        for cost_name in ["transposition_cost_squared_mahalanobis", "transposition_cost_squared_ridge"]
+        for cost_name in [
+            # "transposition_cost_squared_mahalanobis",
+            # "transposition_cost_squared_ridge",
+            "transposition_cost_sqrt_mahalanobis",
+            "transposition_cost_sqrt_ridge",
+        ]
+        for df_same_colorbar_data_gmm in [filter_neuron_cost_df(df_gmm, run_key=[f"d-intr2_hidden-dim64_symmetry1_kappa{kappa}", f"d-intr8_hidden-dim64_symmetry1_kappa{kappa}", f"d-intr32_hidden-dim64_symmetry1_kappa{kappa}"], layer="lins.0", beta=0.01)]
     ]
 
     
@@ -890,18 +929,27 @@ def make_neuron_pair_cost_matrix_plots(outputs_path: str = DEFAULT_OUTPUTS_PATH)
     all_plots.extend([
         [
             plot_and_save_neuron_pair_cost(
-                df_mnist, run_key, layer, 0.01, cost_name,
+                df_mnist, run_key, layer, .01, cost_name,
                 show_y_axis=(layer == "lins.0"), show_colorbar=(layer == "lins.2"),
-                show_x_axis = ("mahalanobis" in cost_name)
+                show_x_axis = ("mahalanobis" in cost_name),
+                df_same_colorbar_data=filter_neuron_cost_df(df_mnist, run_key=run_key, layer=["lins.0", "lins.1", "lins.2"], beta=0.01),
+                colorbar_ticker_base=( # manual adjustment of colorbar ticker spacing
+                    1e-3 if run_key == "mlp_symmetry0" and "mahalanobis" in cost_name 
+                    # else 0.15 if run_key == "mlp_symmetry0_kappa0" and "mahalanobis" in cost_name
+                    else 1.5 if run_key == "mlp_symmetry1_kappa0"
+                    else 4 if run_key == "mlp_symmetry1_kappa1"
+                    else None
+                )
                 # range_y=([-0.2, 0.2] if run_key == "mlp_symmetry0" else None)
             )
             for layer in ["lins.0", "lins.1", "lins.2"] #, "lins.3"]
         ]
         for run_key in ["mlp_symmetry0", "mlp_symmetry1_kappa0", "mlp_symmetry1_kappa1",  "mlp_symmetry3_kappa1"]
         for cost_name in [
-            "transposition_cost_squared_mahalanobis",
-            # "transposition_cost_sqrt_mahalanobis",
-            "transposition_cost_squared_ridge"
+            # "transposition_cost_squared_mahalanobis",
+            # "transposition_cost_squared_ridge",
+            "transposition_cost_sqrt_mahalanobis",
+            "transposition_cost_sqrt_ridge",
         ]
     ])
 
