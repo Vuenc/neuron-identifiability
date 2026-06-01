@@ -22,6 +22,8 @@ nbformat = ">=5.10.4,<6"
 scikit-learn = ">=1.7.1,<2"
 wandb = ">=0.21.0,<0.22"
 hydra-core = ">=1.3.2,<2"
+polars = ">=1.39.3,<2"
+natsort = ">=8.4.0,<9"
 
 [pypi-dependencies]
 highcharts-core = ">=1.10.3, <2"
@@ -34,6 +36,8 @@ pytorch_geometric = ">=2.7.0,<3"
 [feature.ffcv.dependencies]
 matplotlib = ">=3.10.5,<4"
 opencv = ">=4.12.0,<5"
+pkg-config = "*"
+compilers = "*"
 cupy = ">=13.6.0,<14"
 numba = ">=0.61.2,<0.62"
 libjpeg-turbo = ">=3.1.0,<4"
@@ -44,10 +48,17 @@ ffcv = ">=1.0.2, <2"
 [feature.plotting.dependencies]
 ipywidgets = ">=8.1.8,<9"
 anywidget = ">=0.9.21,<0.10"
-texlive-core = ">=20230313,<20230314"
+seaborn = ">=0.13.2,<0.14"
+matplotlib = ">=3.10.9,<4"
+pyarrow = ">=23.0.0,<24"
+tectonic = ">=0.16.9,<0.17"
 
 [activation.env]
 PKG_CONFIG_PATH = "{CONDA_PREFIX}/lib/pkgconfig:{ENV:PKG_CONFIG_PATH}"
 
 [environments]
-default = ["gnn", "ffcv", "plotting"]
+default = [
+    "gnn",
+    "plotting",
+    "ffcv"
+]
