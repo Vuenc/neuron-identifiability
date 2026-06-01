@@ -14,9 +14,9 @@ num_models: 2
 
 # Global settings
 seed: null
-init_seed: null  # Controls parameter initialization
-mask_seed: null  # Controls parameter initialization
-optimization_seed: null   # Controls optimizer state initialization (defaults to init_seed)
+init_seed: null  # Controls parameter initialization (defaults to random init seed per model). Can be list (seed per model) or number (same for all models).
+mask_seed: null  # Controls parameter initialization (defaults to random mask seed per train.py run, but fixed between multiple models trained in the same training run, so they are compatible for LMC)
+optimization_seed: null   # Controls optimizer state initialization (defaults to init_seed). Can be list (seed per model) or number (same for all models).
 device: cuda
 output_dir: ./outputs
 experiment_name: ${now:%Y-%m-%d}/${now:%H-%M-%S}__${model.name}
