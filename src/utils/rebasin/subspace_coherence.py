@@ -42,12 +42,11 @@ def estimate_subspace_basis_at_explained_variance(data: torch.Tensor, target_exp
   explained_variance_ratio= explained_variance_ratio_cum[k].item()
   return U, explained_variance_ratio
 
-def evaluate_anisotropy(subspace_basis, layer: SparseLinear | Linear | NoiseLinear | None, mask_distribution_mean: float):
+def compute_gram_matrices(subspace_basis, layer: SparseLinear | Linear | NoiseLinear | None):
   # Subspace basis: U (in the notation of the paper)
   # Diagonal operator D (in the notation of the paper)
-  # TODO check if the dimensions are correct, or if it needs to be transposed (check on a layer where input dimension != output dimension)
   if not (isinstance(layer, SparseLinear) or isinstance(layer, Linear) or isinstance(layer, NoiseLinear)):
-    raise ValueError("Argument layer must be of type Linear, SparseLinear, or NoiseLinear")
+    raise ValueError(f"Argument layer must be of type Linear, SparseLinear, or NoiseLinear. Received: {type(layer)}")
   diagonal_operator: torch.Tensor = (
     layer.mask
     if isinstance(layer, SparseLinear)
@@ -63,10 +62,18 @@ def evaluate_anisotropy(subspace_basis, layer: SparseLinear | Linear | NoiseLine
   #    - Here: compute for all neurons i, where the dimensions are ("neurons", "subspace dimension", "subspace dimension")
   gram_matrices = torch.einsum("nkd,nKd->nkK", projected_diagonal_operators, projected_diagonal_operators)
 
+  return gram_matrices
+
+def evaluate_anisotropy(subspace_basis, layer: SparseLinear | Linear | NoiseLinear | None, mask_distribution_mean: float):
+  gram_matrices = compute_gram_matrices(subspace_basis, layer)
+
   difference_from_identity = gram_matrices - torch.eye(gram_matrices.shape[1], device=gram_matrices.device)*mask_distribution_mean
   operator_norms = torch.linalg.matrix_norm(difference_from_identity, ord=2)
 
   return operator_norms
+
+def compute_subspace_coherence(subspace_basis):
+  return (subspace_basis**2).sum(dim=1).max().item()
 
 def compute_subspace_coherence_and_anisotropy(
     data: torch.Tensor,
@@ -80,7 +87,7 @@ def compute_subspace_coherence_and_anisotropy(
 ) -> SubspaceCoherenceResult:
   subspace_basis, explained_variance_ratio = estimate_subspace_basis_at_explained_variance(
     data, target_explained_variance_ratio)
-  subspace_coherence = (subspace_basis**2).sum(dim=1).max().item()
+  subspace_coherence = compute_subspace_coherence(subspace_basis)
 
   if layer is not None:
     if mask_distribution_mean is None or mask_distribution_ess_sup is None or mask_distribution_std_dev is None:
