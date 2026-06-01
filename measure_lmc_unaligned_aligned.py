@@ -28,20 +28,26 @@ def suppress_prints(suppress=True):
 
 def align_activation_matching(model1, model2, cfg, data_info, device="cuda:0"):
     if cfg.model.name == "mlp_mnist":
-        permutation_spec = src.utils.rebasin.mlp_permutation_spec(3, norm=True, bias=True)
-        correlation_modes = [ActivationCorrelationMode.DotProduct, ActivationCorrelationMode.PearsonCorrelationWithZeroForConstant]
+        permutation_spec = src.utils.rebasin.mlp_permutation_spec(cfg.model.num_layers-1, norm=True, bias=True)
+        correlation_modes = [
+            # ActivationCorrelationMode.PearsonCorrelationWithZeroForConstant, ActivationCorrelationMode.DotProduct
+            ActivationCorrelationMode.PearsonUncorrelatednessWithOneForConstant
+        ]
     elif cfg.model.name == "resnet_cifar":
         permutation_spec = src.utils.rebasin.resnet20_permutation_spec()
         # ReLU resnets tend to have all-zero recorded activations for one channel, which crashes usual Pearson correlation
-        correlation_modes = [ActivationCorrelationMode.PearsonCorrelationWithZeroForConstant]
+        correlation_modes = [
+            # ActivationCorrelationMode.PearsonCorrelationWithZeroForConstant
+            ActivationCorrelationMode.PearsonUncorrelatednessWithOneForConstant
+        ]
         # We shorten the train loader: not enough memory for everything
         data_info["train_loader"] = [d for _, d in zip(range(10), data_info["train_loader"])]
     else:
         raise ValueError(f"Unsupported model name: {cfg.model.name}")
-    activation_matching_results = src.utils.rebasin.activation_matching.activation_matching(
+    activation_matching_results: Dict[src.utils.rebasin.activation_matching.ActivationRecordingPoint[str, ActivationCorrelationMode], Dict[str, src.utils.rebasin.activation_matching.MatchingResult]] = src.utils.rebasin.activation_matching.activation_matching(
         permutation_spec, model1, model2, data_info["train_loader"], device=device, correlation_modes=correlation_modes
     )
-    matching_results_by_permutation_name = activation_matching_results[('post_activation_function', src.utils.rebasin.common.ActivationCorrelationMode.PearsonCorrelationWithZeroForConstant)]
+    matching_results_by_permutation_name = activation_matching_results[('post_activation_function', correlation_modes[0])]
     perm = {
         perm_name: matching_result.optimal_permutation.to("cuda:0")
         for perm_name, matching_result in matching_results_by_permutation_name.items()
@@ -99,14 +105,14 @@ def compute_lmc_results(checkpoint_path_1, checkpoint_path_2, num_interpolation_
         model1_state_dict = model1.state_dict()
         model2_state_dict = model2.state_dict()
 
-    # Align with weight matching
-    model2_state_dict_weight_aligned = align_weight_matching(model1, model2, cfg, device=device)
-    interpolation_results_weight_aligned = interpolate_models(
-        model1, model1_state_dict, model2_state_dict_weight_aligned,
-        data_info['train_loader'], data_info['val_loader'], data_info['test_loader'],
-        steps=num_interpolation_steps,
-        device=cfg.device,
-    )
+    # # Align with weight matching
+    # model2_state_dict_weight_aligned = align_weight_matching(model1, model2, cfg, device=device)
+    # interpolation_results_weight_aligned = interpolate_models(
+    #     model1, model1_state_dict, model2_state_dict_weight_aligned,
+    #     data_info['train_loader'], data_info['val_loader'], data_info['test_loader'],
+    #     steps=num_interpolation_steps,
+    #     device=cfg.device,
+    # )
 
     # Align with activation matching
     model2_state_dict_activation_aligned = align_activation_matching(model1, model2, cfg, data_info, device=device)
@@ -120,26 +126,35 @@ def compute_lmc_results(checkpoint_path_1, checkpoint_path_2, num_interpolation_
     return dict(
         interpolation_results_unaligned=interpolation_results_unaligned,
         interpolation_results_activation_aligned=interpolation_results_activation_aligned,
-        interpolation_results_weight_aligned=interpolation_results_weight_aligned
+        # interpolation_results_weight_aligned=interpolation_results_weight_aligned
     )
 
-    # return results
-
 def main():
-    MODEL_1_RANGE = list(range(1, 17, 2))
-    # MODEL_1_RANGE = list(range(1, 3, 2))
-    EPOCH = 100
+    # MODEL_1_RANGE = list(range(1, 17, 2))
+    MODEL_1_RANGE = list(range(1, 5, 2))
+    EPOCH = 50
 
     all_results = []
     import tqdm
     import json
     import argparse
 
-    parser = argparse.ArgumentParser("measure_rebasinability.py")
+    parser = argparse.ArgumentParser("measure_lmc_unaligned_aligned.py")
     parser.add_argument("--output-file", type=str, required=True)
     parser.add_argument("--architecture", type=str)
+    parser.add_argument("--checkpoint-directory", type=str)
+    parser.add_argument("--run-key")
     args = parser.parse_args()
-    checkpoint_directories = checkpoint_directories_by_architecture[args.architecture] if args.architecture else { **checkpoint_directories_by_architecture["mlp"], **checkpoint_directories_by_architecture["resnet"],}
+
+    if (args.checkpoint_directory is None) != (args.run_key is None):
+        raise ValueError("Arguments --checkpoint-directory and --run-key must both be specified if one of them is specified.")
+    if (args.checkpoint_directory is None) == (args.architecture is None):
+        raise ValueError("Exactly one of the arguments --architecture and --checkpoint-directory must be specified!")
+
+    if args.architecture:
+        checkpoint_directories = checkpoint_directories_by_architecture[args.architecture]
+    else:
+        checkpoint_directories = {args.run_key: args.checkpoint_directory}
 
     # Assuming all are using the same dataset
     with hydra.initialize(version_base=None, config_path=str(pathlib.Path(list(checkpoint_directories.values())[0]))):
@@ -152,11 +167,11 @@ def main():
         tqdm_run.set_description(f"Run: {run_key}")
         for model1_index in (tqdm_model_pair := tqdm.tqdm(MODEL_1_RANGE, desc=run_key, leave=False)):
             model2_index = model1_index + 1
-            tqdm_model_pair.set_description(f"Model pair: (Model {model1_index}, Model {model2_index})")
+            tqdm_model_pair.set_description(desc=f"Model pair: (Model {model1_index}, Model {model2_index})")
             with suppress_prints(suppress=False):
                 checkpoint_path_1 = checkpoint_path(model1_index, EPOCH)
                 checkpoint_path_2 = checkpoint_path(model2_index, EPOCH)
-                model_pair_results = compute_lmc_results(checkpoint_path_1=checkpoint_path(model1_index, EPOCH), checkpoint_path_2=checkpoint_path(model2_index, EPOCH), data_info=data_info, num_interpolation_steps=36)
+                model_pair_results = compute_lmc_results(checkpoint_path_1=checkpoint_path(model1_index, EPOCH), checkpoint_path_2=checkpoint_path(model2_index, EPOCH), data_info=data_info, num_interpolation_steps=8)
             all_results.append({
                 "run_key": run_key,
                 "model1_index": model1_index,
