@@ -72,7 +72,7 @@ pixi run python measure_activation_matching_objective.py --architecture mlp --ou
 pixi run python measure_realization_cost.py --architecture mlp --output-file outputs/realization-costs-mlp.parquet
 
 # d) Neuron realization and pairwise swap costs (ridge regression estimate):
-pixi run python measure_realization_cost_ridge_regression.py --output-file outputs/ridge-regression-realization-costs-mlp.parquet
+pixi run python measure_realization_cost_ridge_regression.py --architecture mlp --output-file outputs/ridge-regression-realization-costs-mlp.parquet
 
 # e) Subspace coherence of intermediate representations:
 pixi run python measure_subspace_coherence.py --architecture mlp --output-file outputs/subspace-coherence-mlp.json

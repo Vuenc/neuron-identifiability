@@ -1,12 +1,10 @@
-from collections import defaultdict
-from re import L
-from typing import Any, Callable, Dict, List, NamedTuple, Tuple
+from typing import Dict, List, Tuple
 
 import torch
 from scipy.optimize import linear_sum_assignment
 import tqdm
 
-from src.utils.rebasin.common import PermutationName, PermutationSpec, get_permuted_param, mlp_permutation_spec
+from src.utils.rebasin.common import PermutationName, PermutationSpec, get_permuted_param
 
 def weight_matching(
   permutation_spec: PermutationSpec,

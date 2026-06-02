@@ -767,9 +767,7 @@ def ntk_tracking_analysis(cfg: DictConfig, output_dir: Path, data_info: dict):
         # Get selected data points for linearization (without computing NTK)
         if compute_linearization and not compute_ntk_stats:
             if cfg.model.name == 'gnn_arxiv':
-                # For GNN, store the fixed indices as "selected data"
-                # (we'll need to handle this differently in linearization agreement)
-                pass  # TODO: handle GNN case
+                raise NotImplementedError()
             else:
                 selected_data = sample_data_points(
                     data_loader,

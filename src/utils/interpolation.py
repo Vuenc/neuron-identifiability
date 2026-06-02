@@ -127,8 +127,7 @@ def evaluate_model_comprehensive_batched(
                 # Handle different data formats
                 if hasattr(data, 'x'):
                     # Graph data
-                    # TODO graph forward with stacked models
-                    raise NotImplementedError()
+                    raise NotImplementedError("GNN forward with stacked models not implemented")
                     output = model(data.x, data.edge_index)
                 else:
                     # Regular data
@@ -201,7 +200,6 @@ def interpolate_models(
     interpolated_parameters = torch.utils._pytree.tree_map(interpolate_tensors, model1_state, model2_state) # type: ignore[import]
 
     # TODO introduce batching over parameters (maybe for large models 20 model evaluations at once is too much)
-    # TODO it might be smart to use other data loaders (larger batches for train, for example) for added efficiency
 
     metrics_keys = ['train_accuracy', 'val_accuracy', 'train_loss', 'val_loss', 'test_accuracy', 'test_loss']
 
