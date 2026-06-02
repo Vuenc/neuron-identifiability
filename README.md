@@ -66,7 +66,7 @@ In the next step, the `--architecture` flag will refer to the keys of the `check
 pixi run python measure_lmc_unaligned_aligned.py --architecture mlp --output-file outputs/lmc-results-mlp.json
 
 # b) Activation matching objectives:
-pixi run python measure_rebasinability.py --architecture mlp --output-file outputs/activation-matching-results-mlp.json
+pixi run python measure_activation_matching_objective.py --architecture mlp --output-file outputs/activation-matching-results-mlp.json
 
 # c) Neuron realization and pairwise swap costs (Mahalanobis estimate):
 pixi run python measure_realization_cost.py --architecture mlp --output-file outputs/realization-costs-mlp.parquet
@@ -84,7 +84,7 @@ The environment is managed by `pixi`.
 
 `train.py` is the main training script.
 
-`src/models` contains symmetric and asymmetric models, in particular `mlp.py`, `resnet.py`
+`src/models` contains symmetric and asymmetric models, in particular `mlp.py`, `resnet.py`.
 
 `src/utils` contains various utilities, in particular `interpolation.py` and `record_activations.py`.
 

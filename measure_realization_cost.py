@@ -150,13 +150,8 @@ def compute_realization_cost_results(
 
 
 def main():
-    # MODEL_RANGE = list(range(1, 17, 1))
-    # MODEL_RANGE = [1]
-    # EPOCH_RANGE = list(range(0, 101, 5))
-    # EPOCH_RANGE = list(range(0, 101, 5))
-    # EPOCH_RANGE = [*range(10), *range(10, 101, 5)]
-    # EPOCH_RANGE = [100]
-    # EPOCH_RANGE = list(range(0, 11, 1))
+    DEFAULT_MODEL_RANGE = [1]
+    DEFAULT_EPOCH_RANGE = [100]
     MAX_PARALLEL_PROCESSES = 15
 
     all_results = []
@@ -164,27 +159,15 @@ def main():
     parser = argparse.ArgumentParser(prog="measure_realization_cost.py")
     parser.add_argument("--output-file", type=str, required=True)
     parser.add_argument("--architecture", type=str, default="mlp-batchnorm")
-    # parser.add_argument("--checkpoint-directories", type=str, nargs="+", required=False)
-    # parser.add_argument("--run-key")
     parser.add_argument("--explained-variance", type=float, default=0.9)
     parser.add_argument("--no-suppress-prints", action="store_true")
     parser.add_argument("--parallel-processes", type=int, default=MAX_PARALLEL_PROCESSES)
+    parser.add_argument("--epochs", type=int, nargs="+", required=False)
+    parser.add_argument("--model-indices", type=int, nargs="+", required=False)
     args = parser.parse_args()
 
-    # if (args.checkpoint_directories is None) != (args.run_key is None):
-    #     raise ValueError("Arguments --checkpoint-directory and --run-key must both be specified if one of them is specified.")
-    # if (args.checkpoint_directories is None) == (args.architecture is None):
-    #     raise ValueError("Exactly one of the arguments --architecture and --checkpoint-directory must be specified!")
-
-    # if args.architecture:
-    #     checkpoint_directories = checkpoint_directories_by_architecture[args.architecture]
-    # else:
-    #     checkpoint_directories = {args.run_key: args.checkpoint_directories}
-
-    # # Assuming all are using the same dataset
-    # with hydra.initialize(version_base=None, config_path=str(pathlib.Path(list(checkpoint_directories.values())[0]))):
-    #     _cfg = hydra.compose(config_name="config")
-    # _cfg.dataset.batch_size = 2**15
+    epoch_range = args.epochs if args.epochs is not None else DEFAULT_EPOCH_RANGE
+    model_range = args.model_indices if args.model_indices is not None else DEFAULT_MODEL_RANGE
 
     if args.parallel_processes > 1:
         executor = concurrent.futures.ProcessPoolExecutor(max_workers=args.parallel_processes)
@@ -192,25 +175,31 @@ def main():
         import types
         executor = types.SimpleNamespace(submit=lambda f, **kwargs: types.SimpleNamespace(result = lambda: f(**kwargs)))
     
-    checkpoint_paths: List[str] = [f"{path}/checkpoint_epoch_100_model_1.pt" for path in checkpoint_directories_by_architecture[args.architecture].values()]
+    # checkpoint_paths: List[str] = [f"{path}/checkpoint_epoch_100_model_1.pt" for path in .values()]
+    checkpoint_directories = checkpoint_directories_by_architecture[args.architecture]
+    checkpoint_path = lambda model_index, epoch, checkpoint_directory: f"{checkpoint_directory}/checkpoint_epoch_{epoch}_model_{model_index}.pt"
 
     with suppress_prints(suppress=not args.no_suppress_prints):
         all_results = list(tqdm.tqdm((
             {
-                "checkpoint_path": checkpoint_path,
-                "run_directory": str(pathlib.Path(checkpoint_path).parent),
-                "realization_cost_results": future.result()
+                "checkpoint_path": (path := checkpoint_path(model_index, epoch, checkpoint_directory)),
+                "run_directory": str(pathlib.Path(path).parent),
+                "realization_cost_results": future.result(),
+                "model_index": model_index,
+                "epoch": epoch
             }
-            for future, checkpoint_path in (
+            for future, model_index, epoch, checkpoint_directory in (
                 (
                     executor.submit(compute_realization_cost_results,
-                        **dict(checkpoint_path=checkpoint_path, target_explained_variance_ratio=args.explained_variance)
+                        **dict(checkpoint_path=checkpoint_path(model_index, epoch, checkpoint_directory), target_explained_variance_ratio=args.explained_variance)
                     ),
-                    checkpoint_path
+                    model_index, epoch, checkpoint_directory
                 )
-                for checkpoint_path in checkpoint_paths
+                for model_index in model_range
+                for epoch in epoch_range
+                for checkpoint_directory in checkpoint_directories.values()
             )
-        ), total=len(checkpoint_paths)))
+        ), total=len(model_range)*len(epoch_range)*len(checkpoint_directories)))
     pl.DataFrame(all_results).write_parquet(args.output_file, compression="zstd")
 
 if __name__ == "__main__":

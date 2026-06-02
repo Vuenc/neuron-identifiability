@@ -72,68 +72,72 @@ def compute_subspace_coherence_results(
                 })
     return results
 
-MODEL_RANGE = list(range(1, 17, 1))
-# MODEL_RANGE = [1]
-# EPOCH_RANGE = list(range(0, 101, 5))
-# EPOCH_RANGE = list(range(0, 101, 5))
-EPOCH_RANGE = [*range(10), *range(10, 101, 5)]
-# EPOCH_RANGE = [100]
-# EPOCH_RANGE = list(range(0, 11, 1))
-MAX_PARALLEL_PROCESSES = 22
+def main():
+    DEFAULT_MODEL_RANGE = list(range(1, 5))
+    DEFAULT_EPOCH_RANGE = list(range(0, 101, 5))
+    DEFAULT_MAX_PARALLEL_PROCESSES = 22
 
-all_results = []
+    all_results = []
 
-parser = argparse.ArgumentParser(prog="measure_subspace_coherence.py")
-parser.add_argument("--output-file", type=str, required=True)
-parser.add_argument("--architecture", type=str)
-parser.add_argument("--checkpoint-directory", type=str)
-parser.add_argument("--run-key")
-parser.add_argument("--no-suppress-prints", action="store_true")
-parser.add_argument("--parallel-processes", type=int, default=MAX_PARALLEL_PROCESSES)
-args = parser.parse_args()
+    parser = argparse.ArgumentParser(prog="measure_subspace_coherence.py")
+    parser.add_argument("--output-file", type=str, required=True)
+    parser.add_argument("--architecture", type=str)
+    parser.add_argument("--checkpoint-directory", type=str)
+    parser.add_argument("--run-key")
+    parser.add_argument("--no-suppress-prints", action="store_true")
+    parser.add_argument("--parallel-processes", type=int, default=DEFAULT_MAX_PARALLEL_PROCESSES)
+    parser.add_argument("--epochs", type=int, nargs="+", required=False)
+    parser.add_argument("--model-indices", type=int, nargs="+", required=False)
+    args = parser.parse_args()
 
-if (args.checkpoint_directory is None) != (args.run_key is None):
-    raise ValueError("Arguments --checkpoint-directory and --run-key must both be specified if one of them is specified.")
-if (args.checkpoint_directory is None) == (args.architecture is None):
-    raise ValueError("Exactly one of the arguments --architecture and --checkpoint-directory must be specified!")
+    epoch_range = args.epochs if args.epochs is not None else DEFAULT_EPOCH_RANGE
+    model_range = args.model_indices if args.model_indices is not None else DEFAULT_MODEL_RANGE
 
-if args.architecture:
-    checkpoint_directories = checkpoint_directories_by_architecture[args.architecture]
-else:
-    checkpoint_directories = {args.run_key: args.checkpoint_directory}
+    if (args.checkpoint_directory is None) != (args.run_key is None):
+        raise ValueError("Arguments --checkpoint-directory and --run-key must both be specified if one of them is specified.")
+    if (args.checkpoint_directory is None) == (args.architecture is None):
+        raise ValueError("Exactly one of the arguments --architecture and --checkpoint-directory must be specified!")
 
-# Assuming all are using the same dataset
-with hydra.initialize(version_base=None, config_path=str(pathlib.Path(list(checkpoint_directories.values())[0]))):
-    _cfg = hydra.compose(config_name="config")
-_cfg.dataset.batch_size = 2**15
-EPOCH_RANGE = [epoch for epoch in EPOCH_RANGE if epoch <= _cfg.training.num_epochs] or [_cfg.training.num_epochs]
-data_info = train.setup_data_loaders(_cfg)
+    if args.architecture:
+        checkpoint_directories = checkpoint_directories_by_architecture[args.architecture]
+    else:
+        checkpoint_directories = {args.run_key: args.checkpoint_directory}
 
-checkpoint_path = lambda model_index, epoch: f"{checkpoint_directories[run_key]}/checkpoint_epoch_{epoch}_model_{model_index}.pt"
+    # Assuming all are using the same dataset
+    with hydra.initialize(version_base=None, config_path=str(pathlib.Path(list(checkpoint_directories.values())[0]))):
+        _cfg = hydra.compose(config_name="config")
+    _cfg.dataset.batch_size = 2**15
+    epoch_range = [epoch for epoch in epoch_range if epoch <= _cfg.training.num_epochs] or [_cfg.training.num_epochs]
+    data_info = train.setup_data_loaders(_cfg)
 
-for run_key in (tqdm_run := tqdm.tqdm(checkpoint_directories.keys())):
-    tqdm_run.set_description(f"Run: {run_key}")
-    for model_index in (tqdm_model := tqdm.tqdm(MODEL_RANGE, desc=run_key, leave=False)):
-        tqdm_model.set_description(f"Model {model_index}")
-        with suppress_prints(suppress=not args.no_suppress_prints):
-            if args.parallel_processes > 1:
-                executor = concurrent.futures.ProcessPoolExecutor(max_workers=args.parallel_processes)
-            else:
-                import types
-                executor = types.SimpleNamespace(submit=lambda f, **kwargs: types.SimpleNamespace(result = lambda: f(**kwargs)))
-            model_results = [future.result() for future in [
-                executor.submit(compute_subspace_coherence_results,
-                    **dict(checkpoint_path=checkpoint_path(model_index, epoch), data_info=data_info)
-                ) for epoch in EPOCH_RANGE]
-            ]
-            if args.parallel_processes > 1:
-                executor.shutdown()
-        for coherence_results, epoch in zip(model_results, EPOCH_RANGE):
-            all_results.append({
-                "run_key": run_key,
-                "model_index": model_index,
-                "epoch": epoch,
-                "coherence_results": coherence_results
-            })
-        with open(args.output_file, "w") as f:
-            json.dump(all_results, f)
+    checkpoint_path = lambda model_index, epoch: f"{checkpoint_directories[run_key]}/checkpoint_epoch_{epoch}_model_{model_index}.pt"
+
+    for run_key in (tqdm_run := tqdm.tqdm(checkpoint_directories.keys())):
+        tqdm_run.set_description(f"Run: {run_key}")
+        for model_index in (tqdm_model := tqdm.tqdm(model_range, desc=run_key, leave=False)):
+            tqdm_model.set_description(f"Model {model_index}")
+            with suppress_prints(suppress=not args.no_suppress_prints):
+                if args.parallel_processes > 1:
+                    executor = concurrent.futures.ProcessPoolExecutor(max_workers=args.parallel_processes)
+                else:
+                    import types
+                    executor = types.SimpleNamespace(submit=lambda f, **kwargs: types.SimpleNamespace(result = lambda: f(**kwargs)))
+                model_results = [future.result() for future in [
+                    executor.submit(compute_subspace_coherence_results,
+                        **dict(checkpoint_path=checkpoint_path(model_index, epoch), data_info=data_info)
+                    ) for epoch in epoch_range]
+                ]
+                if args.parallel_processes > 1:
+                    executor.shutdown()
+            for coherence_results, epoch in zip(model_results, epoch_range):
+                all_results.append({
+                    "run_key": run_key,
+                    "model_index": model_index,
+                    "epoch": epoch,
+                    "coherence_results": coherence_results
+                })
+            with open(args.output_file, "w") as f:
+                json.dump(all_results, f)
+
+if __name__ == "__main__":
+    main()

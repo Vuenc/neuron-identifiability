@@ -9,6 +9,9 @@ from src.utils.rebasin import ActivationCorrelationMode
 import numpy as np
 from contextlib import contextmanager
 from checkpoint_directories import checkpoint_directories_by_architecture
+import tqdm
+import json
+import argparse
 
 @contextmanager
 def suppress_prints(suppress=True):
@@ -91,23 +94,26 @@ def compute_activation_matching_results(
     return results
 
 def main():
-    # MODEL_1_RANGE = list(range(1, 16, 2))
-    # EPOCH_RANGE = list(range(0, 101, 5))
-    MODEL_1_RANGE = list(range(1, 4, 2))
-    EPOCH_RANGE = [100]
-    # EPOCH_RANGE = list(range(0, 11, 1))
+    DEFAULT_MODEL_RANGE = list(range(1, 5))
+    DEFAULT_EPOCH_RANGE = list(range(0, 101, 5))
+    DEFAULT_MAX_PARALLEL_PROCESSES = 1
 
     all_results = []
-    import tqdm
-    import json
-    import argparse
 
     parser = argparse.ArgumentParser("measure_rebasinability.py")
     parser.add_argument("--output-file", type=str, required=True)
     parser.add_argument("--architecture", type=str, required=True)
-    parser.add_argument("--parallel-processes", type=int, default=1)
+    parser.add_argument("--parallel-processes", type=int, default=DEFAULT_MAX_PARALLEL_PROCESSES)
+    parser.add_argument("--epochs", type=int, nargs="+", required=False)
+    parser.add_argument("--model-indices", type=int, nargs="+", required=False)
     args = parser.parse_args()
     checkpoint_directories = checkpoint_directories_by_architecture[args.architecture]
+
+    epoch_range = args.epochs if args.epochs is not None else DEFAULT_EPOCH_RANGE
+    model_range = args.model_indices if args.model_indices is not None else DEFAULT_MODEL_RANGE
+
+    if len(model_range) % 2 != 0:
+        print("Warning: Odd number of models, skipping one model in pairwise LMC.")
 
     # Assuming all are using the same dataset
     with hydra.initialize(version_base=None, config_path=str(pathlib.Path(list(checkpoint_directories.values())[0]))):
@@ -119,8 +125,8 @@ def main():
 
     for run_key in (tqdm_run := tqdm.tqdm(checkpoint_directories.keys())):
         tqdm_run.set_description(f"Run: {run_key}")
-        for model1_index in (tqdm_model_pair := tqdm.tqdm(MODEL_1_RANGE, desc=run_key, leave=False)):
-            model2_index = model1_index + 1
+        for i in (tqdm_model_pair := tqdm.tqdm(range(0, len(model_range), 2), desc=run_key, leave=False)):
+            model1_index, model2_index = model_range[i], model_range[i+1]
             tqdm_model_pair.set_description(f"Model pair: (Model {model1_index}, Model {model2_index})")
             with suppress_prints(suppress=False):
                 if args.parallel_processes > 1:
@@ -131,11 +137,11 @@ def main():
                 model_pair_results = list(tqdm.tqdm([future.result() for future in [
                     executor.submit(compute_activation_matching_results,
                         **dict(checkpoint_path_1=checkpoint_path(model1_index, epoch), checkpoint_path_2=checkpoint_path(model2_index, epoch), data_info=data_info)
-                    ) for epoch in EPOCH_RANGE]
+                    ) for epoch in epoch_range]
                 ]))
                 if args.parallel_processes > 1:
                     executor.shutdown()
-            for matching_results, epoch in zip(model_pair_results, EPOCH_RANGE):
+            for matching_results, epoch in zip(model_pair_results, epoch_range):
                 all_results.append({
                     "run_key": run_key,
                     "model1_index": model1_index,

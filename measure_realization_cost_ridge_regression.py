@@ -167,49 +167,20 @@ def estimate_neuron_pair_distances(
             })
     return outputs
 
-def measure_realization_costs_for_runs(
-        run_keys,
-        model_index,
-        epoch,
-        output_path,
-        architecture,
-        num_inner_descent_iterations: int,
-        base_num_neurons: int,
-        num_neuron_pairs_to_compare: int,
-        data_subsampling_ratio: float,
-        betas: List[float],
-        data_info=None,
-        device="cuda:0"
-):
-    make_checkpoint_path = lambda model_index, epoch, run_key: f"{checkpoint_directories_by_architecture[architecture][run_key]}/checkpoint_epoch_{epoch}_model_{model_index}.pt"
-    results = {}
-    data_info_provided = data_info is not None
-    for run_key in run_keys or tqdm.tqdm(checkpoint_directories_by_architecture[architecture].keys(), leave=False):
-        checkpoint_path = make_checkpoint_path(model_index, epoch, run_key)
-
-        with hydra.initialize(version_base=None, config_path=str(pathlib.Path(checkpoint_path).parent)):
-            cfg = hydra.compose(config_name="config")
-        cfg.dataset.batch_size = 500
-        if not data_info_provided:
-            data_info = train.setup_data_loaders(cfg)
-        assert data_info is not None
-
-        model = train.create_model(cfg, mask_seed=-1).to(device)
-        model.load_state_dict(torch.load(checkpoint_path, map_location=device)["model_state_dict"])
-        results[run_key] = estimate_neuron_pair_distances(
-            model=model, data_loader=data_info["val_loader"],
-            cfg=cfg,
-            num_inner_descent_iterations=num_inner_descent_iterations,
-            base_num_neurons=base_num_neurons,
-            num_neuron_pairs_to_compare=num_neuron_pairs_to_compare,
-            data_subsampling_ratio=data_subsampling_ratio,
-            betas=betas,
-            device=device
-        )
-        pl.DataFrame({
-            "num_inner_descent_iterations": num_inner_descent_iterations,
-            "results": results
-        }).write_parquet(output_path, compression="zstd")
+# def measure_realization_costs_for_runs(
+#         run_keys,
+#         model_index,
+#         epoch,
+#         output_path,
+#         architecture,
+#         num_inner_descent_iterations: int,
+#         base_num_neurons: int,
+#         num_neuron_pairs_to_compare: int,
+#         data_subsampling_ratio: float,
+#         betas: List[float],
+#         data_info=None,
+#         device="cuda:0"
+# ):
 
 
 def main():
@@ -225,19 +196,49 @@ def main():
     parser.add_argument("--epoch", type=int, required=True)
     args = parser.parse_args()
     print(args.run_keys)
-    measure_realization_costs_for_runs(
-        args.run_keys,
-        model_index=1,
-        epoch=args.epoch,
-        output_path=args.output_file,
-        architecture=args.architecture,
-        num_inner_descent_iterations=args.inner_iterations,
-        base_num_neurons=args.num_neurons,
-        num_neuron_pairs_to_compare=args.num_neuron_pairs,
-        data_subsampling_ratio=args.data_subsampling_ratio,
-        betas=args.betas
-    )
+    device = "cuda:0"
 
+    model_index = 1
+    epoch = args.epoch
+
+    make_checkpoint_path = lambda model_index, epoch, run_key: f"{checkpoint_directories_by_architecture[args.architecture][run_key]}/checkpoint_epoch_{epoch}_model_{model_index}.pt"
+    results = {}
+    for run_key in args.run_keys or tqdm.tqdm(checkpoint_directories_by_architecture[args.architecture].keys(), leave=False):
+        checkpoint_path = make_checkpoint_path(model_index, epoch, run_key)
+
+        with hydra.initialize(version_base=None, config_path=str(pathlib.Path(checkpoint_path).parent)):
+            cfg = hydra.compose(config_name="config")
+        cfg.dataset.batch_size = 500
+        data_info = train.setup_data_loaders(cfg)
+
+        model = train.create_model(cfg, mask_seed=-1).to(device)
+        model.load_state_dict(torch.load(checkpoint_path, map_location=device)["model_state_dict"])
+        results[run_key] = estimate_neuron_pair_distances(
+            model=model, data_loader=data_info["val_loader"],
+            cfg=cfg,
+            num_inner_descent_iterations=args.inner_iterations,
+            base_num_neurons=args.num_neurons,
+            num_neuron_pairs_to_compare=args.num_neuron_pairs,
+            data_subsampling_ratio=args.data_subsampling_ratio,
+            betas=args.betas,
+            device=device
+        )
+        pl.DataFrame({
+            "num_inner_descent_iterations": args.inner_iterations,
+            "results": results
+        }).write_parquet(args.output_file, compression="zstd")
 
 if __name__ == "__main__":
     main()
+
+
+
+    # DEFAULT_MODEL_RANGE = [1]
+    # DEFAULT_EPOCH_RANGE = [100]
+    # MAX_PARALLEL_PROCESSES = 15
+
+    # parser.add_argument("--epochs", type=int, nargs="+", required=False)
+    # parser.add_argument("--model-indices", type=int, nargs="+", required=False)
+
+    # epoch_range = args.epochs if args.epochs is not None else DEFAULT_EPOCH_RANGE
+    # model_range = args.model_indices if args.model_indices is not None else DEFAULT_MODEL_RANGE

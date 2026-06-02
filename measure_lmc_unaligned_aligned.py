@@ -1,4 +1,3 @@
-import concurrent.futures
 from typing import Dict
 import hydra
 import torch
@@ -9,9 +8,11 @@ from src.utils.interpolation import interpolate_models
 import train
 import src.utils.rebasin.activation_matching
 from src.utils.rebasin import ActivationCorrelationMode
-import numpy as np
 from contextlib import contextmanager
 from checkpoint_directories import checkpoint_directories_by_architecture
+import tqdm
+import json
+import argparse
 
 @contextmanager
 def suppress_prints(suppress=True):
@@ -136,21 +137,22 @@ def compute_lmc_results(
     )
 
 def main():
-    # MODEL_1_RANGE = list(range(1, 17, 2))
-    MODEL_1_RANGE = list(range(1, 5, 2))
-    EPOCH = 50
+    DEFAULT_MODEL_RANGE = list(range(1, 5))
+    DEFAULT_EPOCH_RANGE: list[int] = [100]
 
     all_results = []
-    import tqdm
-    import json
-    import argparse
 
     parser = argparse.ArgumentParser("measure_lmc_unaligned_aligned.py")
     parser.add_argument("--output-file", type=str, required=True)
     parser.add_argument("--architecture", type=str)
     parser.add_argument("--checkpoint-directory", type=str)
     parser.add_argument("--run-key")
+    parser.add_argument("--epochs", type=int, nargs="+", required=False)
+    parser.add_argument("--model-indices", type=int, nargs="+", required=False)
     args = parser.parse_args()
+
+    epoch_range = args.epochs if args.epochs is not None else DEFAULT_EPOCH_RANGE
+    model_range = args.model_indices if args.model_indices is not None else DEFAULT_MODEL_RANGE
 
     if (args.checkpoint_directory is None) != (args.run_key is None):
         raise ValueError("Arguments --checkpoint-directory and --run-key must both be specified if one of them is specified.")
@@ -171,29 +173,30 @@ def main():
 
     for run_key in (tqdm_run := tqdm.tqdm(checkpoint_directories.keys())):
         tqdm_run.set_description(f"Run: {run_key}")
-        for model1_index in (tqdm_model_pair := tqdm.tqdm(MODEL_1_RANGE, desc=run_key, leave=False)):
-            model2_index = model1_index + 1
+        for i in (tqdm_model_pair := tqdm.tqdm(range(0, len(model_range), 2), desc=run_key, leave=False)):
+            model1_index, model2_index = model_range[i], model_range[i+1]
             tqdm_model_pair.set_description(desc=f"Model pair: (Model {model1_index}, Model {model2_index})")
-            with suppress_prints(suppress=False):
-                checkpoint_path_1 = checkpoint_path(model1_index, EPOCH)
-                checkpoint_path_2 = checkpoint_path(model2_index, EPOCH)
-                model_pair_results = compute_lmc_results(
-                    checkpoint_path_1=checkpoint_path(model1_index, EPOCH),
-                    checkpoint_path_2=checkpoint_path(model2_index, EPOCH),
-                    data_info=data_info,
-                    num_interpolation_steps=8
-                )
-            all_results.append({
-                "run_key": run_key,
-                "model1_index": model1_index,
-                "model2_index": model2_index,
-                "checkpoint_path_1": checkpoint_path_1,
-                "checkpoint_path_2": checkpoint_path_2,
-                "epoch": EPOCH,
-                **model_pair_results
-            })
-            with open(args.output_file, "w") as f:
-                json.dump(all_results, f)
+            for epoch in tqdm.tqdm(epoch_range, leave=False):
+                with suppress_prints(suppress=False):
+                    checkpoint_path_1 = checkpoint_path(model1_index, epoch)
+                    checkpoint_path_2 = checkpoint_path(model2_index, epoch)
+                    model_pair_results = compute_lmc_results(
+                        checkpoint_path_1=checkpoint_path(model1_index, epoch),
+                        checkpoint_path_2=checkpoint_path(model2_index, epoch),
+                        data_info=data_info,
+                        num_interpolation_steps=8
+                    )
+                all_results.append({
+                    "run_key": run_key,
+                    "model1_index": model1_index,
+                    "model2_index": model2_index,
+                    "checkpoint_path_1": checkpoint_path_1,
+                    "checkpoint_path_2": checkpoint_path_2,
+                    "epoch": epoch,
+                    **model_pair_results
+                })
+                with open(args.output_file, "w") as f:
+                    json.dump(all_results, f)
 
 if __name__ == "__main__":
     main()
