@@ -39,11 +39,17 @@ def compute_activation_matching_results(checkpoint_path_1, checkpoint_path_2, de
 
     if cfg.model.name == "mlp_mnist":
         permutation_spec = src.utils.rebasin.mlp_permutation_spec(3, norm=True, bias=True)
-        correlation_modes = [ActivationCorrelationMode.DotProduct, ActivationCorrelationMode.PearsonCorrelationWithZeroForConstant]
+        correlation_modes = [
+            ActivationCorrelationMode.PearsonCorrelationWithZeroForConstant, ActivationCorrelationMode.DotProduct
+            # ActivationCorrelationMode.PearsonUncorrelatednessWithOneForConstant
+        ]
     elif cfg.model.name == "resnet_cifar":
         permutation_spec = src.utils.rebasin.resnet20_permutation_spec()
         # ReLU resnets tend to have all-zero recorded activations for one channel, which crashes usual Pearson correlation
-        correlation_modes = [ActivationCorrelationMode.PearsonCorrelationWithZeroForConstant]
+        correlation_modes = [
+            ActivationCorrelationMode.PearsonCorrelationWithZeroForConstant
+            # ActivationCorrelationMode.PearsonUncorrelatednessWithOneForConstant
+        ]
         # We shorten the train loader: not enough memory for everything
         data_info["train_loader"] = [d for _, d in zip(range(10), data_info["train_loader"])]
     else:
@@ -80,8 +86,10 @@ def compute_activation_matching_results(checkpoint_path_1, checkpoint_path_2, de
     return results
 
 def main():
-    MODEL_1_RANGE = list(range(1, 5, 2))
-    EPOCH_RANGE = list(range(0, 101, 5))
+    # MODEL_1_RANGE = list(range(1, 16, 2))
+    # EPOCH_RANGE = list(range(0, 101, 5))
+    MODEL_1_RANGE = list(range(1, 4, 2))
+    EPOCH_RANGE = [100]
     # EPOCH_RANGE = list(range(0, 11, 1))
 
     all_results = []
