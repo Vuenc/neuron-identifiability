@@ -30,7 +30,11 @@ def suppress_prints(suppress=True):
 #     "mlp_symmetry0": "outputs/2026-01-15/17-07-22_mlp_mnist_sym-0__db8ehws3__y5oujjmq",
 # }
 
-def compute_subspace_coherence_results(checkpoint_path, device="cuda:0", data_info=None):
+def compute_subspace_coherence_results(
+    checkpoint_path,
+    device="cuda:0",
+    data_info=None
+) -> List[Dict]:
     with hydra.initialize(version_base=None, config_path=str(pathlib.Path(checkpoint_path).parent)):
         cfg = hydra.compose(config_name="config")
     cfg.dataset.batch_size = 500

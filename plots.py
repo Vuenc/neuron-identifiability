@@ -687,7 +687,7 @@ def load_df_ridge_mahalanobis(PARQUET_PATH_RIDGE, PARQUET_PATH_MAHALANOBIS, MAP_
         .unpivot(index="num_inner_descent_iterations", variable_name="run_key", value_name="results")
         .explode("results").unnest("results")
         .explode("neuron_realization_costs").unnest("neuron_realization_costs")
-        .drop("objective_mse") # TODO fix MSE objective
+        .drop("objective_mse")
         .with_columns(mse=(pl.col("objective_full") - pl.col("objective_weight_regularization"))*pl.col("beta"))
         # Adding in transposition costs
         .sort(*(groups := ["layer", "run_key", "beta"]), "id1", "id2")  # Sort the entire dataset into stacked matrices

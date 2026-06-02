@@ -75,7 +75,13 @@ def align_weight_matching(model1, model2, cfg, device="cuda:0"):
     return permuted_params_2
 
 
-def compute_lmc_results(checkpoint_path_1, checkpoint_path_2, num_interpolation_steps=10, data_info=None, device="cuda:0") -> Dict[str, Dict]:
+def compute_lmc_results(
+        checkpoint_path_1,
+        checkpoint_path_2,
+        num_interpolation_steps=10,
+        data_info=None,
+        device="cuda:0"
+) -> Dict[str, Dict]:
     with hydra.initialize(version_base=None, config_path=str(pathlib.Path(checkpoint_path_1).parent)):
         cfg = hydra.compose(config_name="config")
     cfg.dataset.batch_size = 512
@@ -105,7 +111,7 @@ def compute_lmc_results(checkpoint_path_1, checkpoint_path_2, num_interpolation_
         model1_state_dict = model1.state_dict()
         model2_state_dict = model2.state_dict()
 
-    # # Align with weight matching
+    # # Align with weight matching (commented out for now!)
     # model2_state_dict_weight_aligned = align_weight_matching(model1, model2, cfg, device=device)
     # interpolation_results_weight_aligned = interpolate_models(
     #     model1, model1_state_dict, model2_state_dict_weight_aligned,
@@ -171,7 +177,12 @@ def main():
             with suppress_prints(suppress=False):
                 checkpoint_path_1 = checkpoint_path(model1_index, EPOCH)
                 checkpoint_path_2 = checkpoint_path(model2_index, EPOCH)
-                model_pair_results = compute_lmc_results(checkpoint_path_1=checkpoint_path(model1_index, EPOCH), checkpoint_path_2=checkpoint_path(model2_index, EPOCH), data_info=data_info, num_interpolation_steps=8)
+                model_pair_results = compute_lmc_results(
+                    checkpoint_path_1=checkpoint_path(model1_index, EPOCH),
+                    checkpoint_path_2=checkpoint_path(model2_index, EPOCH),
+                    data_info=data_info,
+                    num_interpolation_steps=8
+                )
             all_results.append({
                 "run_key": run_key,
                 "model1_index": model1_index,

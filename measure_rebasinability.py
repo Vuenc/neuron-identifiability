@@ -1,4 +1,5 @@
 import concurrent.futures
+from typing import Dict, List
 import hydra
 import torch
 import pathlib
@@ -22,7 +23,12 @@ def suppress_prints(suppress=True):
         finally:
             __builtins__.print = original_print
 
-def compute_activation_matching_results(checkpoint_path_1, checkpoint_path_2, device="cuda:0", data_info=None):
+def compute_activation_matching_results(
+        checkpoint_path_1,
+        checkpoint_path_2,
+        device="cuda:0",
+        data_info=None
+) -> List[Dict]:
     with hydra.initialize(version_base=None, config_path=str(pathlib.Path(checkpoint_path_1).parent)):
         cfg = hydra.compose(config_name="config")
     cfg.dataset.batch_size = 512
@@ -80,7 +86,6 @@ def compute_activation_matching_results(checkpoint_path_1, checkpoint_path_2, de
                     "permutations": {
                         "optimal": matching_result.optimal_permutation.tolist(),
                     }
-                    # "activation_similarities": matching_result.activation_similarities.tolist()
                 })
 
     return results

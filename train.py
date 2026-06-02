@@ -254,7 +254,7 @@ def train_one(cfg: DictConfig, output_dir: Path, init_seed: int, optimization_se
 
     # Set optimizer seed before creating optimizer
     set_seed(optimization_seed)
-    print(f"Opt seed: {optimization_seed}")
+    print(f"Optimization seed: {optimization_seed}")
     data_info = setup_data_loaders(cfg)
 
     optimizer = create_optimizer(cfg.optimizer.name, model, **cfg.optimizer)
@@ -1252,7 +1252,7 @@ def main(cfg: DictConfig) -> None:
     
     print(f"Global seed: {cfg.seed}")
     print(f"Init seed(s): {init_seeds}")
-    print(f"Opt seed(s): {optimization_seeds}")
+    print(f"Optimization seed(s): {optimization_seeds}")
     print(f"Mask seed: {mask_seed}")
     
     print(f"Starting: {cfg.experiment_name}")
