@@ -68,10 +68,11 @@ def compute_subspace_coherence_results(checkpoint_path, device="cuda:0", data_in
                 })
     return results
 
-# MODEL_RANGE = list(range(1, 17, 1))
-MODEL_RANGE = [1]
+MODEL_RANGE = list(range(1, 17, 1))
+# MODEL_RANGE = [1]
 # EPOCH_RANGE = list(range(0, 101, 5))
-EPOCH_RANGE = list(range(0, 101, 5))
+# EPOCH_RANGE = list(range(0, 101, 5))
+EPOCH_RANGE = [*range(10), *range(10, 101, 5)]
 # EPOCH_RANGE = [100]
 # EPOCH_RANGE = list(range(0, 11, 1))
 MAX_PARALLEL_PROCESSES = 22
