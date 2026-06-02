@@ -1,6 +1,5 @@
 ## Beyond Structural Symmetries: Linear Mode Connectivity via Neuron Identifiability
 
-
 by Vincent Bürgin* ¹, Daniel Herbst* ¹, Ya-Wei Eileen Lin¹, Stefanie Jegelka¹². (¹: TU Munich, ²: MIT).
 
 To appear at ICML 2026.
@@ -11,6 +10,7 @@ To appear at ICML 2026.
 
 > *Many striking phenomena in deep learning, such as linear mode connectivity and the structured behavior of training dynamics, are closely tied to parameter symmetries: transformations that leave the realized function unchanged. Despite growing attention to parameter symmetries, the exact interplay between parameters, data, and representations remains underexplored. To investigate this, we develop a theoretical framework of effective function classes, i.e., the set of functions a neuron can realize on its input support, and the norm cost of realizing them. We then formalize effective symmetry breaking via neuron identifiability across independent training runs. Our analysis shows that neural networks can admit large families of approximately equivalent solutions even in structurally asymmetric models. We further show that neuron identifiability enables representation merging without prior alignment, and characterize when such merging admits a linear low-loss path. These findings highlight the role of effective function classes in affecting the loss landscape.*
 
+![Neuron swap costs on synthetic data with varying intrinsic dimension k](figures/neuron-swap-cost.png)
 
 ### Running the code
 
@@ -42,7 +42,7 @@ pixi run python train.py num_models=4 logging=console --config-name mlp_symmetry
 
 Now you should have directories with model checkpoints under `outputs/`.
 
-4. **Edit `checkpoint_directories.py`** to include paths to your newly trained models. `checkpoint_directories.checkpoint_directories_by_architecture` groups runs, and its sub-dictionaries map human-readable keys to run directories. You can use `group_models_helper.ipynb` to help you produce this dictionary. Example:
+4. **Edit `checkpoint_directories.py`** to include paths to your newly trained models. The dictionary `checkpoint_directories.checkpoint_directories_by_architecture` groups runs by architecture, and its sub-dictionaries map human-readable keys to run directories. You can use `group_models_helper.ipynb` to help you produce this dictionary. Example:
 
 ```python
 {
@@ -57,7 +57,7 @@ Now you should have directories with model checkpoints under `outputs/`.
 }
 ```
 
-In the next step, the `--architecture` flag will refer to the `checkpoint_directories` defined above, and the run keys defined therein are used to identify different types of models.
+In the next step, the `--architecture` flag will refer to the keys of the `checkpoint_directories` dictionary defined above, and the run keys defined therein are used to identify different types of models.
 
 5. **Run analysis scripts on the trained models:**
 
@@ -80,7 +80,7 @@ pixi run python measure_subspace_coherence.py --architecture mlp --output-file o
 
 ### Organization
 
-The environment is managed by `pixi`
+The environment is managed by `pixi`.
 
 `train.py` is the main training script.
 
@@ -94,4 +94,4 @@ Analysis scripts used to obtain our experimental results are at the top level: `
 
 `plots.py` contains code to generate plots from the result files output by the analysis scripts.
 
-The initial version of the codebase was based on https://github.com/cptq/asymmetric-networks (Lim*, Putterman*, Walters, Maron & Jegelka 2024: *The Empirical Impact of Neural Parameter Symmetries, or Lack Thereof*)
+Initial version of the codebase based on https://github.com/cptq/asymmetric-networks (Lim*, Putterman*, Walters, Maron & Jegelka 2024: *The Empirical Impact of Neural Parameter Symmetries, or Lack Thereof*)
