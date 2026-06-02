@@ -7,6 +7,8 @@ defaults:
   - training: default
   - interpolation: disabled
   - logging: console
+  - override hydra/job_logging: disabled
+  - override hydra/hydra_logging: disabled
   - _self_
 
 # Multi-model experiment settings
@@ -24,11 +26,7 @@ max_parallel_processes: 10
 
 # Hydra configuration
 hydra:
+  output_subdir: null
   run:
-    dir: ${output_dir}/${experiment_name}
+    dir: .
 
-# Override any config here
-# model:
-#   name: resnet_cifar
-# dataset:
-#   name: cifar10
