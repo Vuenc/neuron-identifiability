@@ -1,37 +1,97 @@
-## The Empirical Impact of Neural Parameter Symmetries, or Lack Thereof
+## Beyond Structural Symmetries: Linear Mode Connectivity via Neuron Identifiability
 
 
-by Derek Lim*, Theo (Moe) Putterman*, Robin Walters, Haggai Maron, Stefanie Jegelka. (MIT, UC Berkeley, Northeastern, Technion, NVIDIA, and TU Munich).
+by Vincent Bürgin* ¹, Daniel Herbst* ¹, Ya-Wei Eileen Lin¹, Stefanie Jegelka¹². (¹: TU Munich, ²: MIT).
 
-[[arXiv](https://arxiv.org/abs/2405.20231)]. To appear at NeurIPS 2024.
+To appear at ICML 2026.
 
-![Diagram illustrating difference between standard networks, sigma-Asym networks, and W-Asym networks.](figures/main_diagram.png)
+![Illustration of neuron function classes for standard and different types of asymmetric MLPs.](figures/illustration.png)
 
-Abstract:
-*Many algorithms and observed phenomena in deep learning appear to be affected by parameter symmetries -- transformations of neural network parameters that do not change the underlying neural network function. These include linear mode connectivity, model merging, Bayesian neural network inference, metanetworks, and several other characteristics of optimization or loss-landscapes. However, theoretical analysis of the relationship between parameter space symmetries and these phenomena is difficult. In this work, we empirically investigate the impact of neural parameter symmetries by introducing new neural network architectures that have reduced parameter space symmetries. We develop two methods, with some provable guarantees, of modifying standard neural networks to reduce parameter space symmetries. With these new methods, we conduct a comprehensive experimental study consisting of multiple tasks aimed at assessing the effect of removing parameter symmetries. Our experiments reveal several interesting observations on the empirical impact of parameter symmetries; for instance, we observe linear mode connectivity between our networks without alignment of weight spaces, and we find that our networks allow for faster and more effective Bayesian neural network training.*
+***Abstract:***
 
+> *Many striking phenomena in deep learning, such as linear mode connectivity and the structured behavior of training dynamics, are closely tied to parameter symmetries: transformations that leave the realized function unchanged. Despite growing attention to parameter symmetries, the exact interplay between parameters, data, and representations remains underexplored. To investigate this, we develop a theoretical framework of effective function classes, i.e., the set of functions a neuron can realize on its input support, and the norm cost of realizing them. We then formalize effective symmetry breaking via neuron identifiability across independent training runs. Our analysis shows that neural networks can admit large families of approximately equivalent solutions even in structurally asymmetric models. We further show that neuron identifiability enables representation merging without prior alignment, and characterize when such merging admits a linear low-loss path. These findings highlight the role of effective function classes in affecting the loss landscape.*
+
+
+### Running the code
+
+1. **Install the environment** using [*pixi*](https://pixi.prefix.dev/latest/#installation): `pixi install`
+
+2. **Start a training run:**
+
+```bash
+# Train one set of models (W-MLPs, sigma_F = 1)
+pixi run python train.py num_models=4 logging=console --config-name mlp_symmetry1_kappa1_noInterpolation
+```
+
+This trains four ***W***-MLPs with fixed weight scale $1$ and compatible masks (i.e., ***D*** and ***F*** will be the same for the four models, so that they can be interpolated). You will now find trained model checkpoints in `outputs/`. In the codebase, `symmetry0` refers to standard (non-asymmetric) models, `symmetry1` to ***W***-asymmetric models, `symmetry2` to $\sigma$-asymmetric models, and `symmetry3` to *syre*-asymmetric models. The fixed weight scale $\sigma_{\mathbf F}$ is denoted `kappa`.
+
+3. **Train more models in different settings, so we can analyze them:** To additionally train standard MLPs, ***W***-MLPs with zero fixed weights, and *syre*-MLPs, run:
+
+```bash
+# Train three more sets of models:
+
+# Standard MLPs
+pixi run python train.py num_models=4 logging=console --config-name mlp_symmetry0_noInterpolation
+
+# W-MLPs, sigma_F = 1
+pixi run python train.py num_models=4 logging=console --config-name mlp_symmetry1_kappa0_noInterpolation
+
+# syre-MLP, sigma_F = 1)
+pixi run python train.py num_models=4 logging=console --config-name mlp_symmetry3_kappa1_noInterpolation
+```
+
+Now you should have directories with model checkpoints under `outputs/`.
+
+4. **Edit `checkpoint_directories.py`** to include paths to your newly trained models. `checkpoint_directories.checkpoint_directories_by_architecture` groups runs, and its sub-dictionaries map human-readable keys to run directories. You can use `group_models_helper.ipynb` to help you produce this dictionary. Example:
+
+```python
+{
+  # ...
+  "mlp": {
+    "mlp_symmetry0": "outputs/path/to/run/directory1",
+    "mlp_symmetry1_kappa0": "outputs/path/to/run/directory2",
+    "mlp_symmetry1_kappa1": "outputs/path/to/run/directory3",
+    "mlp_symmetry3_kappa1": "outputs/path/to/run/directory4",
+  },
+  # ...
+}
+```
+
+In the next step, the `--architecture` flag will refer to the `checkpoint_directories` defined above, and the run keys defined therein are used to identify different types of models.
+
+5. **Run analysis scripts on the trained models:**
+
+```bash
+# a) Aligned and unaligned LMC:
+pixi run python measure_lmc_unaligned_aligned.py --architecture mlp --output-file outputs/lmc-results-mlp.json
+
+# b) Activation matching objectives:
+pixi run python measure_rebasinability.py --architecture mlp --output-file outputs/activation-matching-results-mlp.json
+
+# c) Neuron realization and pairwise swap costs (Mahalanobis estimate):
+pixi run python measure_realization_cost.py --architecture mlp --output-file outputs/realization-costs-mlp.parquet
+
+# d) Neuron realization and pairwise swap costs (ridge regression estimate):
+pixi run python measure_realization_cost_ridge_regression.py --output-file outputs/ridge-regression-realization-costs-mlp.parquet
+
+# e) Subspace coherence of intermediate representations:
+pixi run python measure_subspace_coherence.py --architecture mlp --output-file outputs/subspace-coherence-mlp.json
+```
 
 ### Organization
 
-`lmc` contains MLP and ResNet linear mode connectivity (LMC) code
+The environment is managed by `pixi`
 
-`gnn` contains GNN LMC code
+`train.py` is the main training script.
 
-`bnn` contains Bayesian NN code
+`src/models` contains symmetric and asymmetric models, in particular `mlp.py`, `resnet.py`
 
-`metanet` contains code for running metanetworks
+`src/utils` contains various utilities, in particular `interpolation.py` and `record_activations.py`.
 
-`metanet_data` contains code for building datasets of image classifiers, and for testing monotonic linear interpolation (MLI).
+`src/utils/rebasin` contains rebasining code, in particular `activation_matching.py`.
 
-## BibTeX citation
+Analysis scripts used to obtain our experimental results are at the top level: `measure_*.py` (usage see above).
 
-Here is the BibTeX citation, which you can use to reference our paper and code:
+`plots.py` contains code to generate plots from the result files output by the analysis scripts.
 
-```bib
-@article{lim2024empirical,
-  title={The Empirical Impact of Neural Parameter Symmetries, or Lack Thereof},
-  author={Lim, Derek and Putterman, Moe and Walters, Robin and Maron, Haggai and Jegelka, Stefanie},
-  journal={Advances in neural information processing systems (NeurIPS)},
-  year={2024}
-}
-```
+The initial version of the codebase was based on https://github.com/cptq/asymmetric-networks (Lim*, Putterman*, Walters, Maron & Jegelka 2024: *The Empirical Impact of Neural Parameter Symmetries, or Lack Thereof*)
