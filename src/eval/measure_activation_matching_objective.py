@@ -1,6 +1,5 @@
 import concurrent.futures
 from typing import Dict, List
-import hydra
 import torch
 import pathlib
 import train
@@ -8,10 +7,12 @@ import src.utils.rebasin.activation_matching
 from src.utils.rebasin import ActivationCorrelationMode
 import numpy as np
 from contextlib import contextmanager
-from checkpoint_directories import checkpoint_directories_by_architecture
+from src.eval.checkpoint_directories import checkpoint_directories_by_architecture
 import tqdm
 import json
 import argparse
+from src.utils.load_config import load_config
+
 
 @contextmanager
 def suppress_prints(suppress=True):
@@ -32,8 +33,7 @@ def compute_activation_matching_results(
         device="cuda:0",
         data_info=None
 ) -> List[Dict]:
-    with hydra.initialize(version_base=None, config_path=str(pathlib.Path(checkpoint_path_1).parent)):
-        cfg = hydra.compose(config_name="config")
+    cfg = load_config(checkpoint_path_1)
     cfg.dataset.batch_size = 512
     if data_info is None:
         data_info = train.setup_data_loaders(cfg)
@@ -116,8 +116,7 @@ def main():
         print("Warning: Odd number of models, skipping one model in pairwise LMC.")
 
     # Assuming all are using the same dataset
-    with hydra.initialize(version_base=None, config_path=str(pathlib.Path(list(checkpoint_directories.values())[0]))):
-        _cfg = hydra.compose(config_name="config")
+    _cfg = load_config(list(checkpoint_directories.values())[0])
     _cfg.dataset.enable_ffcv = False
     data_info = train.setup_data_loaders(_cfg)
 

@@ -3,15 +3,17 @@ from typing import Dict, List
 import hydra
 import torch
 import pathlib
+from src.utils.load_config import load_config 
 from src.utils.record_activations import MODEL_OUTPUT_RECORDING_POINT, ActivationRecordingPoint, RecordInput
 import train
 import src.utils.rebasin.subspace_coherence
 from src.utils.rebasin.subspace_coherence import SubspaceCoherenceResult
 from contextlib import contextmanager
-from checkpoint_directories import checkpoint_directories_by_architecture
+from src.eval.checkpoint_directories import checkpoint_directories_by_architecture
 import tqdm
 import json
 import argparse
+import os
 
 @contextmanager
 def suppress_prints(suppress=True):
@@ -26,17 +28,12 @@ def suppress_prints(suppress=True):
         finally:
             __builtins__.print = original_print
 
-# checkpoint_directories_mlp_nonorm = {
-#     "mlp_symmetry0": "outputs/2026-01-15/17-07-22_mlp_mnist_sym-0__db8ehws3__y5oujjmq",
-# }
-
 def compute_subspace_coherence_results(
     checkpoint_path,
     device="cuda:0",
     data_info=None
 ) -> List[Dict]:
-    with hydra.initialize(version_base=None, config_path=str(pathlib.Path(checkpoint_path).parent)):
-        cfg = hydra.compose(config_name="config")
+    cfg = load_config(checkpoint_path)
     cfg.dataset.batch_size = 500
     print(cfg.dataset)
     if data_info is None:
@@ -101,11 +98,12 @@ def main():
     if args.architecture:
         checkpoint_directories = checkpoint_directories_by_architecture[args.architecture]
     else:
-        checkpoint_directories = {args.run_key: args.checkpoint_directory}
+        checkpoint_directories = {
+            args.run_key: pathlib.Path(os.getcwd()) / args.checkpoint_directory
+        }
 
     # Assuming all are using the same dataset
-    with hydra.initialize(version_base=None, config_path=str(pathlib.Path(list(checkpoint_directories.values())[0]))):
-        _cfg = hydra.compose(config_name="config")
+    _cfg = load_config(list(checkpoint_directories.values())[0])
     _cfg.dataset.batch_size = 2**15
     epoch_range = [epoch for epoch in epoch_range if epoch <= _cfg.training.num_epochs] or [_cfg.training.num_epochs]
     data_info = train.setup_data_loaders(_cfg)

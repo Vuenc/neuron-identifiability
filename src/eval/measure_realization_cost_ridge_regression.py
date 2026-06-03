@@ -2,7 +2,6 @@ from __future__ import annotations
 import math
 import torch
 import pathlib
-import hydra
 import tqdm
 import train
 from typing import Dict, List, NamedTuple
@@ -10,8 +9,9 @@ from src.models.mlp import SparseLinear, NoiseLinear
 from src.models.activation import setup_activation
 from src.utils.record_activations import record_activations, RecordInput
 import argparse
-from checkpoint_directories import checkpoint_directories_by_architecture
+from src.eval.checkpoint_directories import checkpoint_directories_by_architecture
 import polars as pl
+from src.utils.load_config import load_config
 
 type PermutationName = str
 
@@ -206,8 +206,7 @@ def main():
     for run_key in args.run_keys or tqdm.tqdm(checkpoint_directories_by_architecture[args.architecture].keys(), leave=False):
         checkpoint_path = make_checkpoint_path(model_index, epoch, run_key)
 
-        with hydra.initialize(version_base=None, config_path=str(pathlib.Path(checkpoint_path).parent)):
-            cfg = hydra.compose(config_name="config")
+        cfg = load_config(checkpoint_path)
         cfg.dataset.batch_size = 500
         data_info = train.setup_data_loaders(cfg)
 
@@ -230,15 +229,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-    # DEFAULT_MODEL_RANGE = [1]
-    # DEFAULT_EPOCH_RANGE = [100]
-    # MAX_PARALLEL_PROCESSES = 15
-
-    # parser.add_argument("--epochs", type=int, nargs="+", required=False)
-    # parser.add_argument("--model-indices", type=int, nargs="+", required=False)
-
-    # epoch_range = args.epochs if args.epochs is not None else DEFAULT_EPOCH_RANGE
-    # model_range = args.model_indices if args.model_indices is not None else DEFAULT_MODEL_RANGE

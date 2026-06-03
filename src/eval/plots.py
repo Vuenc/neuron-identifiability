@@ -24,12 +24,13 @@ from matplotlib.ticker import FuncFormatter, MaxNLocator, MultipleLocator
 import matplotlib.colors
 import numpy as np
 import pandas as pd
-import checkpoint_directories
+import src.eval.checkpoint_directories as checkpoint_directories
 
 
-DEFAULT_OUTPUTS_PATH = (
-    "outputs"
-)
+import src
+PROJECT_ROOT = Path(src.__file__).parent.parent
+
+DEFAULT_OUTPUTS_PATH = PROJECT_ROOT / "outputs"
 FILE_EXTENSION = "pdf"
 
 
@@ -742,8 +743,8 @@ def load_data_gmm():
     }
 
     df_gmm: pl.DataFrame = load_df_ridge_mahalanobis(
-        "outputs/ridge-regression-realization-costs-gaussian-mixture-dim64.parquet",
-        "outputs/realization-costs-mahalanobis-gaussian-mixture-dim64.parquet",
+        f"{DEFAULT_OUTPUTS_PATH}/ridge-regression-realization-costs-gaussian-mixture-dim64.parquet",
+        f"{DEFAULT_OUTPUTS_PATH}/realization-costs-mahalanobis-gaussian-mixture-dim64.parquet",
         {val.removesuffix("/"): key for key, val in checkpoint_directories.checkpoint_directories_by_architecture["mlp-gaussian-mixture-symmetry1-untrained"].items()}
     ).join(
         pl.DataFrame([
@@ -757,9 +758,8 @@ def load_data_gmm():
 
 def load_data_mnist():
     df_mnist: pl.DataFrame = load_df_ridge_mahalanobis(
-        "outputs/ridge-regression-realization-costs-mnist-batchnorm.parquet",
-        # "outputs/realization-costs-mahalanobis-mnist-batchnorm-explainedvariance_0.8.parquet",
-        "outputs/realization-costs-mahalanobis-mnist-batchnorm.parquet",
+        f"{DEFAULT_OUTPUTS_PATH}/ridge-regression-realization-costs-mnist-batchnorm.parquet",
+        f"{DEFAULT_OUTPUTS_PATH}/realization-costs-mahalanobis-mnist-batchnorm.parquet",
         {val.removesuffix("/"): key for key, val in checkpoint_directories.checkpoint_directories_by_architecture["mlp-batchnorm"].items()}
     )
     consec_pairs_df_mnist = df_mnist.filter(pl.col("id2") == pl.col(name="id1") + 1, pl.col(name="id1") % 2 == 0)

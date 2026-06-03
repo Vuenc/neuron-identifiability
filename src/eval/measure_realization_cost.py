@@ -1,26 +1,23 @@
 import concurrent.futures
 from dataclasses import dataclass
 from typing import Dict, List
-import hydra
 import torch
 import pathlib
 
 from torch.nn import Linear
 
 from src.models.mlp import MLP, WMLP, NoiseLinear, NoiseMLP, SparseLinear
-from src.utils.record_activations import MODEL_OUTPUT_RECORDING_POINT, ActivationRecordingPoint, RecordInput
+from src.utils.record_activations import RecordInput
 import train
-import src.utils.rebasin.subspace_coherence
-from src.utils.rebasin.subspace_coherence import SubspaceCoherenceResult, compute_gram_matrices, compute_subspace_coherence, estimate_subspace_basis_at_explained_variance
+from src.utils.rebasin.subspace_coherence import compute_gram_matrices, compute_subspace_coherence, estimate_subspace_basis_at_explained_variance
 import src.utils.record_activations
 from contextlib import contextmanager
-from checkpoint_directories import checkpoint_directories_by_architecture
+from src.eval.checkpoint_directories import checkpoint_directories_by_architecture
 import tqdm
-import json
 import argparse
 import numpy as np
 import polars as pl
-import random
+from src.utils.load_config import load_config
 
 @contextmanager
 def suppress_prints(suppress=True):
@@ -35,13 +32,6 @@ def suppress_prints(suppress=True):
         finally:
             __builtins__.print = original_print
 
-
-def load_config(directory_or_checkpoint_path: str):
-    path = pathlib.Path(directory_or_checkpoint_path)
-    config_dir = path.parent if path.is_file() else path
-    
-    with hydra.initialize_config_dir(config_dir=str(config_dir.absolute()), version_base=None):
-        return hydra.compose(config_name="config")
 
 def load_model(checkpoint_path: str, device="cuda:0"):
     cfg = load_config(checkpoint_path)
