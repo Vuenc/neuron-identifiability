@@ -42,16 +42,16 @@ pixi run python train.py num_models=4 logging=console --config-name mlp_symmetry
 
 Now you should have directories with model checkpoints under `outputs/`.
 
-4. **Edit `checkpoint_directories.py`** to include paths to your newly trained models. The dictionary `checkpoint_directories.checkpoint_directories_by_architecture` groups runs by architecture, and its sub-dictionaries map human-readable keys to run directories. You can use `group_models_helper.ipynb` to help you produce this dictionary. Example:
+4. **Edit `checkpoint_directories.py`** to include paths to your newly trained models. The dictionary `checkpoint_directories.checkpoint_directories_by_architecture` groups runs by architecture, and its sub-dictionaries map human-readable keys to run directories. You can use `src/eval/group_models_helper.ipynb` to help you produce this dictionary. Example:
 
 ```python
 {
   # ...
   "mlp": {
-    "mlp_symmetry0": "outputs/path/to/run/directory1",
-    "mlp_symmetry1_kappa0": "outputs/path/to/run/directory2",
-    "mlp_symmetry1_kappa1": "outputs/path/to/run/directory3",
-    "mlp_symmetry3_kappa1": "outputs/path/to/run/directory4",
+    "mlp_symmetry0": "/absolute/path/to/run/directory1",
+    "mlp_symmetry1_kappa0": "/absolute/path/to/run/directory2",
+    "mlp_symmetry1_kappa1": "/absolute/path/to/run/directory3",
+    "mlp_symmetry3_kappa1": "/absolute/path/to/run/directory4",
   },
   # ...
 }
@@ -63,19 +63,24 @@ In the next step, the `--architecture` flag will refer to the keys of the `check
 
 ```bash
 # a) Aligned and unaligned LMC:
-pixi run python measure_lmc_unaligned_aligned.py --architecture mlp --output-file outputs/lmc-results-mlp.json
+pixi run python -m src.eval.measure_lmc_unaligned_aligned \
+  --architecture mlp --output-file outputs/lmc-results-mlp.json
 
 # b) Activation matching objectives:
-pixi run python measure_activation_matching_objective.py --architecture mlp --output-file outputs/activation-matching-results-mlp.json
+pixi run python -m src.eval.measure_activation_matching_objective \
+  --architecture mlp --output-file outputs/activation-matching-results-mlp.json
 
 # c) Neuron realization and pairwise swap costs (Mahalanobis estimate):
-pixi run python measure_realization_cost.py --architecture mlp --output-file outputs/realization-costs-mlp.parquet
+pixi run python -m src.eval.measure_realization_cost \
+  --architecture mlp --output-file outputs/realization-costs-mlp.parquet
 
 # d) Neuron realization and pairwise swap costs (ridge regression estimate):
-pixi run python measure_realization_cost_ridge_regression.py --architecture mlp --output-file outputs/ridge-regression-realization-costs-mlp.parquet
+pixi run python -m src.eval.measure_realization_cost_ridge_regression \
+  --architecture mlp --output-file outputs/ridge-regression-realization-costs-mlp.parquet
 
 # e) Subspace coherence of intermediate representations:
-pixi run python measure_subspace_coherence.py --architecture mlp --output-file outputs/subspace-coherence-mlp.json
+pixi run python -m src.eval.measure_subspace_coherence \
+   --architecture mlp --output-file outputs/subspace-coherence-mlp.json
 ```
 
 ### Organization
@@ -90,7 +95,7 @@ The environment is managed by `pixi`.
 
 `src/utils/rebasin` contains rebasining code, in particular `activation_matching.py`.
 
-Analysis scripts used to obtain our experimental results are at the top level: `measure_*.py` (usage see above).
+`src/eval` contains analysis scripts used to obtain our experimental results: `measure_*.py` (usage see above).
 
 `plots.py` contains code to generate plots from the result files output by the analysis scripts.
 
