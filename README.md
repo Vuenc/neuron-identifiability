@@ -4,6 +4,8 @@ by Vincent Bürgin* ¹, Daniel Herbst* ¹, Ya-Wei Eileen Lin¹, Stefanie Jegelka
 
 To appear at ICML 2026.
 
+arXiv: [https://arxiv.org/abs/2606.04754](https://arxiv.org/abs/2606.04754)
+
 ![Illustration of neuron function classes for standard and different types of asymmetric MLPs.](figures/illustration.png)
 
 ***Abstract:***
