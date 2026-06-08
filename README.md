@@ -36,9 +36,9 @@ This trains four ***W***-MLPs with fixed weight scale $1$ and compatible masks (
 pixi run python train.py num_models=4 logging=console --config-name mlp_symmetry0_noInterpolation
 
 # W-MLPs, sigma_F = 1
-pixi run python train.py num_models=4 logging=console --config-name mlp_symmetry1_kappa0_noInterpolation
+pixi run python train.py num_models=4 logging=console --config-name mlp_symmetry1_kappa1_noInterpolation
 
-# syre-MLP, sigma_F = 1)
+# syre-MLPs, sigma_F = 1
 pixi run python train.py num_models=4 logging=console --config-name mlp_symmetry3_kappa1_noInterpolation
 ```
 
@@ -78,12 +78,16 @@ pixi run python -m src.eval.measure_realization_cost \
 
 # d) Neuron realization and pairwise swap costs (ridge regression estimate):
 pixi run python -m src.eval.measure_realization_cost_ridge_regression \
-  --architecture mlp --output-file outputs/ridge-regression-realization-costs-mlp.parquet
+  --architecture <ridge-architecture> --epoch <epoch> --inner-iterations <inner-iterations> \
+  --num-neurons <num-neurons> --num-neuron-pairs <num-neuron-pairs> \
+  --output-file outputs/ridge-regression-realization-costs-mlp.parquet
 
 # e) Subspace coherence of intermediate representations:
 pixi run python -m src.eval.measure_subspace_coherence \
    --architecture mlp --output-file outputs/subspace-coherence-mlp.json
 ```
+
+To reproduce the ridge regression estimates from the paper, first train or provide the corresponding batch-norm ridge-regression experiment checkpoints, add these run directories to `checkpoint_directories.py` under the architecture key passed as `<ridge-architecture>`, and pass explicit values for `<epoch>`, `<inner-iterations>`, `<num-neurons>`, and `<num-neuron-pairs>`.
 
 ### Organization
 
