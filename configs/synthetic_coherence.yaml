@@ -1,0 +1,36 @@
+# @package _global_
+defaults:
+  - override hydra/job_logging: disabled
+  - override hydra/hydra_logging: disabled
+  - _self_
+
+experiment_type: synthetic_coherence
+device: cpu
+output_dir: ./outputs
+experiment_name: synthetic-coherence
+seed: null
+
+synthetic_coherence:
+  copies: 10
+  width: 128
+  active_prob: 0.15
+  n_train: 1024
+  n_test: 2048
+  batch_size: 512
+  epochs: 100
+  lr: 1e-2
+  weight_decay: 1e-2
+  bias_weight_decay: 0.0
+  outer_seeds: 0,1,2,3,4
+  torch_threads: 1
+  interpolation_steps: 21
+  optimizer: adamw
+  train_hidden_bias: true
+  num_pairs: 10
+  anchor_aligned_endpoint: false
+  plot: true
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .

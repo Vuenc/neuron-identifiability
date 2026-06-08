@@ -89,6 +89,14 @@ pixi run python -m src.eval.measure_subspace_coherence \
 
 To reproduce the ridge regression estimates from the paper, first train or provide the corresponding batch-norm ridge-regression experiment checkpoints, add these run directories to `checkpoint_directories.py` under the architecture key passed as `<ridge-architecture>`, and pass explicit values for `<epoch>`, `<inner-iterations>`, `<num-neurons>`, and `<num-neuron-pairs>`.
 
+6. **Run the synthetic coherence experiment:**
+
+```bash
+pixi run python train.py --config-name synthetic_coherence
+```
+
+By default, this writes result JSON files and figures under `outputs/synthetic-coherence/`.
+
 ### Organization
 
 The environment is managed by `pixi`.

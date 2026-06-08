@@ -1,8 +1,79 @@
+from dataclasses import dataclass
 from typing import List, Tuple
+import numpy as np
 import torch
 from torch.utils.data import DataLoader, random_split
 from ..core.registry import register
 import random
+
+
+@dataclass
+class SyntheticCoherenceData:
+    train_x: torch.Tensor
+    train_y: torch.Tensor
+    test_x: torch.Tensor
+    test_y: torch.Tensor
+
+    def as_dict(self) -> dict[str, torch.Tensor]:
+        return {
+            "train_x": self.train_x,
+            "train_y": self.train_y,
+            "test_x": self.test_x,
+            "test_y": self.test_y,
+        }
+
+
+def synthetic_coherence_ambient_dim(copies: int) -> int:
+    return 2 * copies
+
+
+def synthetic_coherence_teacher_output(latent: torch.Tensor) -> torch.Tensor:
+    return torch.relu(latent[:, 0] + latent[:, 1]).unsqueeze(1)
+
+
+def make_exact_copy_embedding(copies: int, active_copies: int) -> torch.Tensor:
+    basis = torch.zeros(synthetic_coherence_ambient_dim(copies), 2)
+    scale = 1.0 / np.sqrt(active_copies)
+    for idx in range(active_copies):
+        basis[2 * idx + 0, 0] = scale
+        basis[2 * idx + 1, 1] = scale
+    return basis
+
+
+def make_random_tight_embedding(
+    copies: int,
+    active_copies: int,
+    perm: torch.Tensor,
+    angles: torch.Tensor,
+    anchor_aligned_endpoint: bool,
+) -> torch.Tensor:
+    basis = torch.zeros(synthetic_coherence_ambient_dim(copies), 2)
+    if active_copies == 1 and anchor_aligned_endpoint:
+        basis[int(perm[0].item()), 0] = 1.0
+        basis[int(perm[1].item()), 1] = 1.0
+        return basis
+
+    scale = 1.0 / np.sqrt(active_copies)
+    for idx in range(active_copies):
+        theta = float(angles[idx].item())
+        row_a = scale * torch.tensor([np.cos(theta), np.sin(theta)], dtype=torch.float32)
+        row_b = scale * torch.tensor([-np.sin(theta), np.cos(theta)], dtype=torch.float32)
+        basis[int(perm[2 * idx].item())] = row_a
+        basis[int(perm[2 * idx + 1].item())] = row_b
+    return basis
+
+
+def make_synthetic_coherence_data(
+    train_latent: torch.Tensor,
+    test_latent: torch.Tensor,
+    basis: torch.Tensor,
+) -> SyntheticCoherenceData:
+    return SyntheticCoherenceData(
+        train_x=train_latent @ basis.T,
+        train_y=synthetic_coherence_teacher_output(train_latent),
+        test_x=test_latent @ basis.T,
+        test_y=synthetic_coherence_teacher_output(test_latent),
+    )
 
 class GaussianSubspaceDataset(torch.utils.data.Dataset):
     """

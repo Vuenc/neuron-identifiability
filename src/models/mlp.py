@@ -121,6 +121,29 @@ class NoiseLinear(nn.Module):
         return F.linear(x, self.effective_weight(), self.bias)
 
 
+class ScalarMaskedReLUNet(nn.Module):
+    def __init__(self, mask: torch.Tensor, train_hidden_bias: bool):
+        super().__init__()
+        self.register_buffer("mask", mask.float(), persistent=False)
+        self.hidden_weight = nn.Parameter(torch.empty(mask.shape[0], mask.shape[1]))
+        if train_hidden_bias:
+            self.hidden_bias = nn.Parameter(torch.zeros(mask.shape[0]))
+        else:
+            self.register_buffer("hidden_bias", torch.zeros(mask.shape[0]), persistent=False)
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        nn.init.normal_(self.hidden_weight, mean=0.0, std=0.05)
+        if isinstance(self.hidden_bias, nn.Parameter):
+            nn.init.zeros_(self.hidden_bias)
+
+    def hidden_act(self, x: torch.Tensor) -> torch.Tensor:
+        return F.relu(x @ (self.hidden_weight * self.mask).T + self.hidden_bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.hidden_act(x).sum(dim=1, keepdim=True)
+
+
 @register('model', 'mlp_standard')
 class MLP(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, num_layers, norm='layer', 

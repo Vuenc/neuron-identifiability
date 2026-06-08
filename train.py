@@ -5,9 +5,12 @@ Main training script using Hydra configuration management.
 
 from __future__ import annotations
 import concurrent.futures
+from dataclasses import asdict, dataclass
 import hydra
 from omegaconf import DictConfig, OmegaConf
+import json
 import torch
+import torch.nn.functional as F
 import numpy as np
 import random
 import os
@@ -27,6 +30,13 @@ from src.data.datasets import (
 from src.models.mlp import create_mlp
 from src.models.resnet import create_resnet
 from src.models.gnn import create_gnn
+from src.models.mlp import ScalarMaskedReLUNet
+from src.data.synthetic import (
+    make_exact_copy_embedding,
+    make_random_tight_embedding,
+    make_synthetic_coherence_data,
+    synthetic_coherence_ambient_dim,
+)
 from src.optimizers.optimizers import create_optimizer
 from src.optimizers.schedulers import create_scheduler
 from src.utils.interpolation import (
@@ -1212,6 +1222,297 @@ def interpolation_analysis(cfg: DictConfig, output_dir: Path, data_info: dict, m
     
     return interpolation_results
 
+
+@dataclass
+class SyntheticCoherenceExperimentConfig:
+    copies: int = 10
+    width: int = 128
+    active_prob: float = 0.15
+    n_train: int = 1024
+    n_test: int = 2048
+    batch_size: int = 512
+    epochs: int = 100
+    lr: float = 1e-2
+    weight_decay: float = 1e-2
+    bias_weight_decay: float = 0.0
+    outer_seeds: list[int] | None = None
+    device: str = "cpu"
+    torch_threads: int = 1
+    interpolation_steps: int = 21
+    optimizer_name: str = "adamw"
+    train_hidden_bias: bool = True
+    num_pairs_per_outer_seed: int = 10
+
+    def output_config(self) -> dict:
+        config = asdict(self)
+        config["num_runs"] = 2 * self.num_pairs_per_outer_seed
+        return config
+
+
+def _parse_synthetic_coherence_outer_seeds(value) -> list[int]:
+    if isinstance(value, str):
+        return [int(piece) for piece in value.split(",") if piece.strip()]
+    if isinstance(value, int):
+        return [value]
+    return [int(piece) for piece in value]
+
+
+def _synthetic_coherence_config(cfg: DictConfig) -> SyntheticCoherenceExperimentConfig:
+    experiment_cfg = cfg.synthetic_coherence
+    return SyntheticCoherenceExperimentConfig(
+        copies=experiment_cfg.copies,
+        width=experiment_cfg.width,
+        active_prob=experiment_cfg.active_prob,
+        n_train=experiment_cfg.n_train,
+        n_test=experiment_cfg.n_test,
+        batch_size=experiment_cfg.batch_size,
+        epochs=experiment_cfg.epochs,
+        lr=experiment_cfg.lr,
+        weight_decay=experiment_cfg.weight_decay,
+        bias_weight_decay=experiment_cfg.bias_weight_decay,
+        outer_seeds=_parse_synthetic_coherence_outer_seeds(experiment_cfg.outer_seeds),
+        device=cfg.device,
+        torch_threads=experiment_cfg.torch_threads,
+        interpolation_steps=experiment_cfg.interpolation_steps,
+        optimizer_name=experiment_cfg.optimizer,
+        train_hidden_bias=experiment_cfg.train_hidden_bias,
+        num_pairs_per_outer_seed=experiment_cfg.num_pairs,
+    )
+
+
+def synthetic_coherence_minibatches(x: torch.Tensor, y: torch.Tensor, batch_size: int):
+    perm = torch.randperm(x.shape[0], device=x.device)
+    for start in range(0, x.shape[0], batch_size):
+        idx = perm[start : start + batch_size]
+        yield x[idx], y[idx]
+
+
+def train_synthetic_coherence_model(
+    mask: torch.Tensor,
+    cfg: SyntheticCoherenceExperimentConfig,
+    data: dict[str, torch.Tensor],
+    seed: int,
+) -> ScalarMaskedReLUNet:
+    set_seed(seed)
+    model = ScalarMaskedReLUNet(mask=mask.to(cfg.device), train_hidden_bias=cfg.train_hidden_bias).to(cfg.device)
+    param_groups = [{"params": [model.hidden_weight], "weight_decay": cfg.weight_decay}]
+    if isinstance(model.hidden_bias, torch.nn.Parameter):
+        param_groups.append({"params": [model.hidden_bias], "weight_decay": cfg.bias_weight_decay})
+    if cfg.optimizer_name == "adamw":
+        optimizer = torch.optim.AdamW(param_groups, lr=cfg.lr)
+    elif cfg.optimizer_name == "adam":
+        optimizer = torch.optim.Adam(param_groups, lr=cfg.lr)
+    else:
+        raise ValueError(f"Unknown optimizer: {cfg.optimizer_name}")
+
+    train_x = data["train_x"].to(cfg.device)
+    train_y = data["train_y"].to(cfg.device)
+    model.train()
+    for _ in range(cfg.epochs):
+        for batch_x, batch_y in synthetic_coherence_minibatches(train_x, train_y, cfg.batch_size):
+            optimizer.zero_grad(set_to_none=True)
+            loss = F.mse_loss(model(batch_x), batch_y)
+            loss.backward()
+            optimizer.step()
+    return model
+
+
+def synthetic_coherence_lerp_state_dicts(model_a: torch.nn.Module, model_b: torch.nn.Module, lam: float) -> dict[str, torch.Tensor]:
+    state_a = model_a.state_dict()
+    state_b = model_b.state_dict()
+    return {key: (1.0 - lam) * state_a[key] + lam * state_b[key] for key in state_a}
+
+
+def synthetic_coherence_mse(model: torch.nn.Module, x: torch.Tensor, y: torch.Tensor) -> float:
+    with torch.no_grad():
+        return F.mse_loss(model(x), y).item()
+
+
+def synthetic_coherence_interpolation_barrier(
+    mask: torch.Tensor,
+    cfg: SyntheticCoherenceExperimentConfig,
+    data: dict[str, torch.Tensor],
+    model_a: ScalarMaskedReLUNet,
+    model_b: ScalarMaskedReLUNet,
+) -> dict[str, object]:
+    eval_model = ScalarMaskedReLUNet(mask=mask.to(cfg.device), train_hidden_bias=cfg.train_hidden_bias).to(cfg.device)
+    test_x = data["test_x"].to(cfg.device)
+    test_y = data["test_y"].to(cfg.device)
+    losses: list[float] = []
+    lambdas = np.linspace(0.0, 1.0, cfg.interpolation_steps)
+    for lam in lambdas:
+        eval_model.load_state_dict(synthetic_coherence_lerp_state_dicts(model_a, model_b, float(lam)))
+        losses.append(synthetic_coherence_mse(eval_model, test_x, test_y))
+    endpoint_max = max(losses[0], losses[-1])
+    return {
+        "lambdas": lambdas.tolist(),
+        "test_losses": losses,
+        "peak_barrier": max(losses) - endpoint_max,
+        "midpoint_barrier": losses[len(losses) // 2] - endpoint_max,
+    }
+
+
+def run_synthetic_coherence_family(
+    family: str,
+    cfg: SyntheticCoherenceExperimentConfig,
+    anchor_aligned_endpoint: bool = False,
+) -> dict:
+    outer_records = []
+    for outer_seed in cfg.outer_seeds or []:
+        mask_generator = torch.Generator().manual_seed(10_000 + outer_seed)
+        mask = torch.bernoulli(
+            torch.full((cfg.width, synthetic_coherence_ambient_dim(cfg.copies)), cfg.active_prob),
+            generator=mask_generator,
+        )
+
+        data_generator = torch.Generator().manual_seed(20_000 + outer_seed)
+        train_latent = torch.randn(cfg.n_train, 2, generator=data_generator)
+        test_latent = torch.randn(cfg.n_test, 2, generator=data_generator)
+
+        perm = None
+        angles = None
+        if family == "random_tight_frame":
+            frame_generator = torch.Generator().manual_seed(30_000 + outer_seed)
+            perm = torch.randperm(synthetic_coherence_ambient_dim(cfg.copies), generator=frame_generator)
+            angles = torch.rand(cfg.copies, generator=frame_generator) * np.pi
+
+        spread_records = []
+        print(f"[{family}] outer seed {outer_seed}")
+        for active_copies in range(1, cfg.copies + 1):
+            if family == "exact_copy":
+                basis = make_exact_copy_embedding(cfg.copies, active_copies)
+            elif family == "random_tight_frame":
+                basis = make_random_tight_embedding(
+                    cfg.copies,
+                    active_copies,
+                    perm=perm,
+                    angles=angles,
+                    anchor_aligned_endpoint=anchor_aligned_endpoint,
+                )
+            else:
+                raise ValueError(f"Unknown family: {family}")
+
+            data = make_synthetic_coherence_data(train_latent, test_latent, basis).as_dict()
+            pair_records = []
+            pair_curves = []
+            pair_peak_barriers = []
+            pair_midpoint_barriers = []
+            for pair_idx in range(cfg.num_pairs_per_outer_seed):
+                seed0 = 40_000 + 1_000 * outer_seed + 2 * pair_idx
+                seed1 = seed0 + 1
+                model_a = train_synthetic_coherence_model(mask, cfg, data, seed=seed0)
+                model_b = train_synthetic_coherence_model(mask, cfg, data, seed=seed1)
+                pair_interp = synthetic_coherence_interpolation_barrier(mask, cfg, data, model_a, model_b)
+                pair_records.append(
+                    {
+                        "pair_index": pair_idx,
+                        "seeds": [seed0, seed1],
+                        "interpolation": pair_interp,
+                    }
+                )
+                pair_curves.append(np.array(pair_interp["test_losses"], dtype=float))
+                pair_peak_barriers.append(float(pair_interp["peak_barrier"]))
+                pair_midpoint_barriers.append(float(pair_interp["midpoint_barrier"]))
+
+            mean_curve = np.stack(pair_curves, axis=0).mean(axis=0)
+            coherence = 1.0 / active_copies
+            spread_records.append(
+                {
+                    "active_copies": active_copies,
+                    "support_dims": 2 * active_copies,
+                    "coherence": coherence,
+                    "num_pairs": cfg.num_pairs_per_outer_seed,
+                    "pair_records": pair_records,
+                    "interpolation": {
+                        "lambdas": pair_records[0]["interpolation"]["lambdas"],
+                        "test_losses": mean_curve.tolist(),
+                        "peak_barrier": float(np.mean(pair_peak_barriers)),
+                        "midpoint_barrier": float(np.mean(pair_midpoint_barriers)),
+                    },
+                }
+            )
+            print(
+                f"  support_dims={2 * active_copies:2d} "
+                f"coherence={coherence:.3f} "
+                f"midpoint_barrier={np.mean(pair_midpoint_barriers):.6f}"
+            )
+
+        outer_record = {
+            "outer_seed": outer_seed,
+            "mask_seed": 10_000 + outer_seed,
+            "dataset_seed": 20_000 + outer_seed,
+            "num_pairs": cfg.num_pairs_per_outer_seed,
+            "spread_records": spread_records,
+        }
+        if family == "random_tight_frame":
+            outer_record["frame_seed"] = 30_000 + outer_seed
+        outer_records.append(outer_record)
+
+    aggregate = []
+    for active_copies in range(1, cfg.copies + 1):
+        midpoint_barriers = []
+        for outer_record in outer_records:
+            record = outer_record["spread_records"][active_copies - 1]
+            midpoint_barriers.extend(
+                float(pair_record["interpolation"]["midpoint_barrier"])
+                for pair_record in record["pair_records"]
+            )
+        values = np.array(midpoint_barriers, dtype=float)
+        aggregate.append(
+            {
+                "active_copies": active_copies,
+                "support_dims": 2 * active_copies,
+                "coherence": 1.0 / active_copies,
+                "mean_midpoint_barrier": float(values.mean()),
+                "std_midpoint_barrier": float(values.std(ddof=1)) if values.size > 1 else 0.0,
+                "midpoint_barriers": values.tolist(),
+            }
+        )
+
+    return {
+        "config": cfg.output_config(),
+        "embedding_family": family,
+        "anchor_aligned_endpoint": bool(anchor_aligned_endpoint),
+        "num_pairs_per_outer_seed": cfg.num_pairs_per_outer_seed,
+        "outer_records": outer_records,
+        "aggregate": aggregate,
+    }
+
+
+def run_synthetic_coherence_experiment(cfg: DictConfig) -> None:
+    experiment_cfg = _synthetic_coherence_config(cfg)
+    if experiment_cfg.torch_threads > 0:
+        torch.set_num_threads(experiment_cfg.torch_threads)
+
+    output_dir = Path(cfg.output_dir) / cfg.experiment_name
+    output_dir.mkdir(parents=True, exist_ok=True)
+    OmegaConf.save(cfg, output_dir / "config.yaml")
+    print(f"Output dir: {output_dir}")
+
+    exact_payload = run_synthetic_coherence_family("exact_copy", experiment_cfg)
+    random_payload = run_synthetic_coherence_family(
+        "random_tight_frame",
+        experiment_cfg,
+        anchor_aligned_endpoint=cfg.synthetic_coherence.anchor_aligned_endpoint,
+    )
+
+    exact_output = output_dir / "exact-copy.json"
+    random_output = output_dir / "random-frame.json"
+    exact_output.write_text(json.dumps(exact_payload, indent=2))
+    random_output.write_text(json.dumps(random_payload, indent=2))
+    print(f"Saved exact-copy results to {exact_output}")
+    print(f"Saved random-frame results to {random_output}")
+
+    if cfg.synthetic_coherence.get("plot", True):
+        import src.eval.plots
+
+        src.eval.plots.make_synthetic_coherence_plots(
+            exact_input=exact_output,
+            random_input=random_output,
+            output_dir=output_dir / "figures",
+        )
+
+
 OmegaConf.register_new_resolver("eval", eval)
 
 @hydra.main(version_base=None, config_path="configs", config_name="config")
@@ -1222,6 +1523,11 @@ def main(cfg: DictConfig) -> None:
     
     print("Config:")
     print(cfg)
+
+    if cfg.get("experiment_type", None) == "synthetic_coherence":
+        run_synthetic_coherence_experiment(cfg)
+        print("Completed.")
+        return
 
     init_seeds_raw = cfg.get('init_seed', None)
     if init_seeds_raw is None:
